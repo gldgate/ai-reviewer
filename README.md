@@ -1,0 +1,118 @@
+# AI Reviewer
+
+A single-binary Go CLI that reviews a GitHub PR using AI personas.
+
+## Setup
+
+1. Install Go 1.25+
+2. Install GitHub CLI (`gh`) and authenticate: `gh auth login`
+3. Install Git
+4. Set up environment variables for AI providers:
+   - `OPENAI_API_KEY`
+   - `ANTHROPIC_API_KEY`
+   - `GEMINI_API_KEY`
+
+## Configuration
+
+The tool expects a `.ai-review` directory. Configuration and personas can be global (in `.ai-review/`) or specific to a repository (in `.ai-review/<repo_owner>/<repo_name>/`). Repository-specific configurations take precedence.
+
+### Model Mapping
+
+Create `.ai-review/<repo_owner>/<repo_name>/config.yaml`. You can define multiple model categories and their pricing for cost estimation:
+
+```yaml
+model_mapping:
+  fastest_good:
+    provider: gemini
+    model: gemini-3-flash-preview
+    max_tokens: 16384
+    input_price_per_million: 0.50
+    output_price_per_million: 3.00
+  balanced:
+    provider: gemini
+    model: gemini-2.5-flash
+    max_tokens: 4096
+    input_price_per_million: 0.30
+    output_price_per_million: 2.50
+```
+
+`max_tokens` here sets the default limit for the category.
+
+### Personas
+
+Create persona files in `.ai-review/<repo_owner>/<repo_name>/personas/*.md`. Personas support several fields in their YAML frontmatter:
+
+```markdown
+---
+id: security
+role: reviewer           # optional: reviewer (default) | explainer
+stage: pre              # optional: pre | post (only for explainers)
+model_category: best_code
+max_tokens: 4096        # optional: overrides model category limit
+path_filters:           # optional: only run if these files changed
+  - "inference-chain/**/*.go"
+exclude_filters:        # optional: ignore these files
+  - "**/*_test.go"
+---
+You are a security expert. Review the following PR for security vulnerabilities.
+```
+
+#### Roles and Stages
+
+- **Reviewer**: (Default) Analyzes the code and produces findings. Findings are automatically normalized into structured data and later aggregated.
+- **Explainer (Pre)**: Runs before reviewers. Must output JSON (file-to-analysis mapping). Its analysis is injected into the context of all subsequent personas for that file.
+- **Explainer (Post)**: Runs after reviewers. Its full output is included in the final report under an "Explanations" section. Useful for providing human-readable guides or high-level summaries.
+
+#### Token Limit Precedence
+
+The maximum tokens for a response is determined by (highest priority first):
+1. `--max-tokens` CLI flag
+2. `max_tokens` in persona frontmatter
+3. `max_tokens` in `config.yaml` model mapping
+
+## Repository Storage
+
+By default, the tool clones repositories into a `.repos` directory relative to the current working directory. This directory is organized by owner and repository name (e.g., `.repos/google/go-github`). If you are already inside the target repository (or a subdirectory of it), the tool will use it directly instead of cloning.
+
+A `.gitignore` file is provided in the project root to ensure that the `.repos` directory and the compiled `ai-review` binary are not tracked by version control.
+
+## Usage
+
+```bash
+go build -o ai-review
+./ai-review pr <repo_owner>/<repo_name> <pr_number> [--max-tokens <int>]
+```
+
+Example:
+```bash
+./ai-review pr google/go-github 1234 --max-tokens 500
+```
+
+## How it works
+
+The tool executes a multi-stage pipeline:
+
+1. **Fetch Context**: Uses `gh` CLI and `git` to fetch PR details and compute the unified diff.
+2. **Pre-run Explainers**: Executes personas with `role: explainer` and `stage: pre`. They provide initial research that is injected into later prompts.
+3. **Reviewers**: Executes standard personas. Each reviewer's raw output is immediately processed by a **Normalization** step (using a cheap model) to extract structured findings (file, line, summary, severity).
+4. **Post-run Explainers**: Executes personas with `role: explainer` and `stage: post`. They provide high-level context or human instructions.
+5. **Aggregation**: All structured findings from all reviewers are sent to an **Aggregator** LLM (using the `balanced` model). It deduplicates issues, clusters related findings, and produces a concise Markdown summary.
+6. **Reporting**: The final report is printed to stdout and saved to the run directory.
+
+## Output and Artifacts
+
+Each run generates a timestamped directory in `.ai-review/<repo_owner>/<repo_name>/runs/<pr_number>/<timestamp>/` containing:
+- `summary.md`: The aggregated Markdown summary.
+- `report.md`: The full report including explanations and stats.
+- `all_findings.json`: All normalized findings from all personas.
+- `persona_name/`: Subdirectories for each persona containing their `raw.md` output and `findings.json` (or `parsed.json`).
+
+Stats and token usage are also appended to `.ai-review/<repo_owner>/<repo_name>/run-log.jsonl`.
+
+## Cost Tracking
+
+The final report includes a "Stats" section with:
+- Token usage (In/Out) per persona and pipeline step.
+- Estimated cost per step based on prices in `config.yaml`.
+- Total estimated cost for the run.
+- Usage summary grouped by model.

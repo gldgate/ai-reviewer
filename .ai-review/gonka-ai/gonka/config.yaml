@@ -1,0 +1,47 @@
+model_mapping:
+  fastest_good:
+    provider: gemini
+    model: gemini-3-flash-preview
+    max_tokens: 16384
+    input_price_per_million: 0.50
+    output_price_per_million: 3.00
+
+  balanced:
+    provider: gemini
+    model: gemini-2.5-flash
+    max_tokens: 4096
+    input_price_per_million: 0.30
+    output_price_per_million: 2.50
+
+  cheap:
+    provider: gemini
+    model: gemini-2.5-flash-lite
+    max_tokens: 16384
+    input_price_per_million: 0.10
+    output_price_per_million: 0.40
+
+  best_code:
+    provider: gemini
+    model: gemini-3-flash-preview
+    max_tokens: 8192
+    input_price_per_million: 0.50
+    output_price_per_million: 3.00
+
+  frontier_best:
+    provider: gemini
+    model: gemini-3-pro-preview
+    max_tokens: 4096
+    input_price_per_million: 2.00
+    output_price_per_million: 12.00
+
+global_instructions: |
+  This code is all using Go version 1.25.
+  The code under ./inference-chain is all Cosmos SDK code for a Layer-1 blockchain.
+  Follow these rules for your review:
+  1. Mention ONLY potential issues. If a file or chunk looks good, do not mention it.
+  2. Do NOT feel obligated to find issues! An ACCURATE report that no issues were found is better than an INACCURATE report that some issues were found.
+  2. Provide a single summary of your findings at the end of your report.
+  3. Include file names and line numbers where applicable (refer to the unified diff).
+  4. Keep your output concise and actionable so reviewers can decide and act quickly.
+  5. Review code modified or added by THIS PR ONLY. Do not review code that is merely adjacent to these changes, that is included solely for context.
+  5. Do NOT do any reviews or checks outside of your explicit instructions. Focus entirely on YOUR instructions.

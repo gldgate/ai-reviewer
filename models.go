@@ -1,0 +1,197 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/google/generative-ai-go/genai"
+	"github.com/sashabaranov/go-openai"
+	googleoption "google.golang.org/api/option"
+)
+
+type ModelClient interface {
+	Generate(ctx context.Context, prompt string, maxTokens int) (ModelResult, error)
+}
+
+type ModelResult struct {
+	Text      string
+	TokensIn  int
+	TokensOut int
+	Provider  string
+	Model     string
+}
+
+type ModelCategory string
+
+const (
+	FastestGood  ModelCategory = "fastest_good"
+	Balanced     ModelCategory = "balanced"
+	BestCode     ModelCategory = "best_code"
+	FrontierBest ModelCategory = "frontier_best"
+)
+
+// OpenAI Client
+type OpenAIClient struct {
+	client *openai.Client
+	model  string
+}
+
+func NewOpenAIClient(apiKey, model string) *OpenAIClient {
+	return &OpenAIClient{
+		client: openai.NewClient(apiKey),
+		model:  model,
+	}
+}
+
+func (c *OpenAIClient) Generate(ctx context.Context, prompt string, maxTokens int) (ModelResult, error) {
+	req := openai.ChatCompletionRequest{
+		Model: c.model,
+		Messages: []openai.ChatCompletionMessage{
+			{
+				Role:    openai.ChatMessageRoleUser,
+				Content: prompt,
+			},
+		},
+	}
+	if maxTokens > 0 {
+		req.MaxTokens = maxTokens
+	}
+	resp, err := c.client.CreateChatCompletion(ctx, req)
+	if err != nil {
+		return ModelResult{}, err
+	}
+
+	return ModelResult{
+		Text:      resp.Choices[0].Message.Content,
+		TokensIn:  resp.Usage.PromptTokens,
+		TokensOut: resp.Usage.CompletionTokens,
+		Provider:  "openai",
+		Model:     c.model,
+	}, nil
+}
+
+// Anthropic Client
+type AnthropicClient struct {
+	client *anthropic.Client
+	model  string
+}
+
+func NewAnthropicClient(apiKey, model string) *AnthropicClient {
+	c := anthropic.NewClient(option.WithAPIKey(apiKey))
+	return &AnthropicClient{
+		client: &c,
+		model:  model,
+	}
+}
+
+func (c *AnthropicClient) Generate(ctx context.Context, prompt string, maxTokens int) (ModelResult, error) {
+	params := anthropic.MessageNewParams{
+		Model: anthropic.Model(c.model),
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
+		},
+	}
+	if maxTokens > 0 {
+		params.MaxTokens = int64(maxTokens)
+	} else {
+		// Anthropic requires MaxTokens, default to 4096 if not provided
+		params.MaxTokens = 4096
+	}
+
+	message, err := c.client.Messages.New(ctx, params)
+	if err != nil {
+		return ModelResult{}, err
+	}
+
+	return ModelResult{
+		Text:      message.Content[0].Text,
+		TokensIn:  int(message.Usage.InputTokens),
+		TokensOut: int(message.Usage.OutputTokens),
+		Provider:  "anthropic",
+		Model:     c.model,
+	}, nil
+}
+
+// Gemini Client
+type GeminiClient struct {
+	client *genai.Client
+	model  string
+}
+
+func NewGeminiClient(ctx context.Context, apiKey, model string) (*GeminiClient, error) {
+	client, err := genai.NewClient(ctx, googleoption.WithAPIKey(apiKey))
+	if err != nil {
+		return nil, err
+	}
+	return &GeminiClient{
+		client: client,
+		model:  model,
+	}, nil
+}
+
+func (c *GeminiClient) Generate(ctx context.Context, prompt string, maxTokens int) (ModelResult, error) {
+	model := c.client.GenerativeModel(c.model)
+	if maxTokens > 0 {
+		model.MaxOutputTokens = genai.Ptr(int32(maxTokens))
+	}
+	resp, err := model.GenerateContent(ctx, genai.Text(prompt))
+	if err != nil {
+		return ModelResult{}, err
+	}
+
+	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+		return ModelResult{}, fmt.Errorf("empty response from Gemini")
+	}
+
+	text := ""
+	for _, part := range resp.Candidates[0].Content.Parts {
+		if t, ok := part.(genai.Text); ok {
+			text += string(t)
+		}
+	}
+
+	// Gemini SDK doesn't always provide token counts in the GenerateContentResponse directly in a simple way
+	// It might be in UsageMetadata if available.
+	tokensIn := 0
+	tokensOut := 0
+	if resp.UsageMetadata != nil {
+		tokensIn = int(resp.UsageMetadata.PromptTokenCount)
+		tokensOut = int(resp.UsageMetadata.CandidatesTokenCount)
+	}
+
+	return ModelResult{
+		Text:      text,
+		TokensIn:  tokensIn,
+		TokensOut: tokensOut,
+		Provider:  "gemini",
+		Model:     c.model,
+	}, nil
+}
+
+func GetModelClient(ctx context.Context, provider, model string) (ModelClient, error) {
+	switch provider {
+	case "openai":
+		apiKey := os.Getenv("OPENAI_API_KEY")
+		if apiKey == "" {
+			return nil, fmt.Errorf("OPENAI_API_KEY not set")
+		}
+		return NewOpenAIClient(apiKey, model), nil
+	case "anthropic":
+		apiKey := os.Getenv("ANTHROPIC_API_KEY")
+		if apiKey == "" {
+			return nil, fmt.Errorf("ANTHROPIC_API_KEY not set")
+		}
+		return NewAnthropicClient(apiKey, model), nil
+	case "gemini":
+		apiKey := os.Getenv("GEMINI_API_KEY")
+		if apiKey == "" {
+			return nil, fmt.Errorf("GEMINI_API_KEY not set")
+		}
+		return NewGeminiClient(ctx, apiKey, model)
+	default:
+		return nil, fmt.Errorf("unknown provider: %s", provider)
+	}
+}

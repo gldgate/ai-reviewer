@@ -1,0 +1,23 @@
+# Binaries
+ai-review
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Repositories
+.repos/
+
+# AI Review Artifacts (Logs and Runs)
+.ai-review/**/runs/
+.ai-review/**/run-log.jsonl
+
+# Test binaries
+*.test
+
+# Coverage output
+*.out
+
+# Go workspace file
+go.work
