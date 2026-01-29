@@ -47,6 +47,9 @@ Create persona files in `.ai-review/<repo_owner>/<repo_name>/personas/*.md`. Per
 id: security
 role: reviewer           # optional: reviewer (default) | explainer
 stage: pre              # optional: pre | post (only for explainers)
+include_findings: true  # optional: include the aggregated summary report (only for post-run explainers)
+include_explainers: ["state-modified"] # optional: list of pre-run explainer IDs to include their analysis for files
+exclude_diff: true      # optional: exclude the full unified diff and show stats instead
 model_category: best_code
 max_tokens: 4096        # optional: overrides model category limit
 path_filters:           # optional: only run if these files changed

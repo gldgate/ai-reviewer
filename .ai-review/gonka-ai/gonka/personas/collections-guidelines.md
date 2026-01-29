@@ -2,7 +2,8 @@
 id: collections-guidelines
 model_category: best_code
 path_filters: ["inference-chain/x/**/*.go"]
-exclude_filters: ["**/*_test.go", "**/*.pb.go", "**/*.pulsar.go"]
+exclude_filters: ["**/*_test.go", "**/*.pb.go", "**/*.pulsar.go", "inference-chain/testutil/**"]
+include_explainers: ["state-modified"]
 ---
 When using any cosmos collections from a cosmos keeper (keeper.go), optimize iterations so that we do not load into memory or iterate more than we need. For example, for a collections.Pair[uint64,string] key,
 you can iterate over all records that have the first value (the uint64) via something like:

@@ -5,6 +5,7 @@ path_filters:
   - "inference-chain/**/*.proto"
   - "inference-chain/**/keeper.go"
   - "inference-chain/app/upgrades/**/*"
+include_explainers: ["state-modified"]
 ---
 You are an expert in Cosmos SDK blockchain migrations. Your task is to review changes to state-related files to ensure data integrity and compatibility for a LIVE chain.
 

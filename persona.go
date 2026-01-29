@@ -10,14 +10,17 @@ import (
 )
 
 type Persona struct {
-	ID             string   `yaml:"id"`
-	ModelCategory  string   `yaml:"model_category"`
-	MaxTokens      int      `yaml:"max_tokens"`
-	PathFilters    []string `yaml:"path_filters"`
-	ExcludeFilters []string `yaml:"exclude_filters"`
-	Role           string   `yaml:"role"`  // reviewer (default) | explainer
-	Stage          string   `yaml:"stage"` // pre | post
-	Instructions   string
+	ID                string   `yaml:"id"`
+	ModelCategory     string   `yaml:"model_category"`
+	MaxTokens         int      `yaml:"max_tokens"`
+	PathFilters       []string `yaml:"path_filters"`
+	ExcludeFilters    []string `yaml:"exclude_filters"`
+	Role              string   `yaml:"role"`  // reviewer (default) | explainer
+	Stage             string   `yaml:"stage"` // pre | post
+	IncludeFindings   bool     `yaml:"include_findings"`
+	IncludeExplainers []string `yaml:"include_explainers"`
+	ExcludeDiff       bool     `yaml:"exclude_diff"`
+	Instructions      string
 }
 
 func LoadPersonas(searchPaths []string, repo string) ([]Persona, error) {

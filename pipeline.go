@@ -167,7 +167,7 @@ func NormalizePersonaOutput(ctx context.Context, client ModelClient, personaID, 
 	normCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
-	result, err := client.Generate(normCtx, prompt, 0)
+	result, err := client.GenerateJSON(normCtx, prompt, 0)
 	if err != nil {
 		return nil, ModelResult{}, err
 	}

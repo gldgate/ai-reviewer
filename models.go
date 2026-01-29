@@ -14,6 +14,7 @@ import (
 
 type ModelClient interface {
 	Generate(ctx context.Context, prompt string, maxTokens int) (ModelResult, error)
+	GenerateJSON(ctx context.Context, prompt string, maxTokens int) (ModelResult, error)
 }
 
 type ModelResult struct {
@@ -47,6 +48,14 @@ func NewOpenAIClient(apiKey, model string) *OpenAIClient {
 }
 
 func (c *OpenAIClient) Generate(ctx context.Context, prompt string, maxTokens int) (ModelResult, error) {
+	return c.generate(ctx, prompt, maxTokens, false)
+}
+
+func (c *OpenAIClient) GenerateJSON(ctx context.Context, prompt string, maxTokens int) (ModelResult, error) {
+	return c.generate(ctx, prompt, maxTokens, true)
+}
+
+func (c *OpenAIClient) generate(ctx context.Context, prompt string, maxTokens int, jsonMode bool) (ModelResult, error) {
 	req := openai.ChatCompletionRequest{
 		Model: c.model,
 		Messages: []openai.ChatCompletionMessage{
@@ -55,6 +64,11 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, maxTokens in
 				Content: prompt,
 			},
 		},
+	}
+	if jsonMode {
+		req.ResponseFormat = &openai.ChatCompletionResponseFormat{
+			Type: openai.ChatCompletionResponseFormatTypeJSONObject,
+		}
 	}
 	if maxTokens > 0 {
 		req.MaxTokens = maxTokens
@@ -88,6 +102,20 @@ func NewAnthropicClient(apiKey, model string) *AnthropicClient {
 }
 
 func (c *AnthropicClient) Generate(ctx context.Context, prompt string, maxTokens int) (ModelResult, error) {
+	return c.generate(ctx, prompt, maxTokens, false)
+}
+
+func (c *AnthropicClient) GenerateJSON(ctx context.Context, prompt string, maxTokens int) (ModelResult, error) {
+	// Anthropic doesn't have a simple "JSON mode" flag in the same way OpenAI does,
+	// but we can ask for it in the prompt or use tool use.
+	// For now, we'll just append a JSON instruction if it's not already there and use regular Generate.
+	// Actually, newer Anthropic models support structured output via tools, but for simplicity
+	// here we will just rely on the system prompt for now, OR we could implement tool use.
+	// The prompt already asks for JSON.
+	return c.generate(ctx, prompt, maxTokens, true)
+}
+
+func (c *AnthropicClient) generate(ctx context.Context, prompt string, maxTokens int, jsonMode bool) (ModelResult, error) {
 	params := anthropic.MessageNewParams{
 		Model: anthropic.Model(c.model),
 		Messages: []anthropic.MessageParam{
@@ -97,7 +125,6 @@ func (c *AnthropicClient) Generate(ctx context.Context, prompt string, maxTokens
 	if maxTokens > 0 {
 		params.MaxTokens = int64(maxTokens)
 	} else {
-		// Anthropic requires MaxTokens, default to 4096 if not provided
 		params.MaxTokens = 4096
 	}
 
@@ -133,7 +160,18 @@ func NewGeminiClient(ctx context.Context, apiKey, model string) (*GeminiClient, 
 }
 
 func (c *GeminiClient) Generate(ctx context.Context, prompt string, maxTokens int) (ModelResult, error) {
+	return c.generate(ctx, prompt, maxTokens, false)
+}
+
+func (c *GeminiClient) GenerateJSON(ctx context.Context, prompt string, maxTokens int) (ModelResult, error) {
+	return c.generate(ctx, prompt, maxTokens, true)
+}
+
+func (c *GeminiClient) generate(ctx context.Context, prompt string, maxTokens int, jsonMode bool) (ModelResult, error) {
 	model := c.client.GenerativeModel(c.model)
+	if jsonMode {
+		model.ResponseMIMEType = "application/json"
+	}
 	if maxTokens > 0 {
 		model.MaxOutputTokens = genai.Ptr(int32(maxTokens))
 	}
@@ -153,8 +191,6 @@ func (c *GeminiClient) Generate(ctx context.Context, prompt string, maxTokens in
 		}
 	}
 
-	// Gemini SDK doesn't always provide token counts in the GenerateContentResponse directly in a simple way
-	// It might be in UsageMetadata if available.
 	tokensIn := 0
 	tokensOut := 0
 	if resp.UsageMetadata != nil {

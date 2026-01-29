@@ -2,7 +2,8 @@
 id: consensus
 model_category: best_code
 path_filters: ["./inference-chain/**/*.go"]
-exclude_filters: ["**/*_test.go", "**/*.pb.go", "**/*.pulsar.go"]
+exclude_filters: ["**/*_test.go", "**/*.pb.go", "**/*.pulsar.go", "inference-chain/testutil/**"]
+include_explainers: ["state-modified"]
 ---
 You are a blockchain consensus expert specializing in Cosmos SDK applications. Your task is to review Go code, specifically focusing on files under the `./inference-chain` path, to identify any potential consensus failures or non-determinism.
 

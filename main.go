@@ -25,10 +25,10 @@ type RunLogEntry struct {
 	OutputPrice float64   `json:"output_price,omitempty"` // Price per million tokens
 }
 
-func runPersona(ctx context.Context, persona Persona, prInfo *PRInfo, globalContext *PRContext, config *Config, maxTokensFlag *int, preRunAnalyses map[string][]string) (ModelResult, time.Duration, *PRContext, error) {
+func runPersona(ctx context.Context, persona Persona, prInfo *PRInfo, globalContext *PRContext, config *Config, maxTokensFlag *int, preRunAnalyses map[string][]string, summary string) (string, ModelResult, time.Duration, *PRContext, error) {
 	modelCfg, ok := config.ModelMapping[persona.ModelCategory]
 	if !ok {
-		return ModelResult{}, 0, nil, fmt.Errorf("no model mapping for category %s", persona.ModelCategory)
+		return "", ModelResult{}, 0, nil, fmt.Errorf("no model mapping for category %s", persona.ModelCategory)
 	}
 
 	personaContext := globalContext
@@ -36,16 +36,16 @@ func runPersona(ctx context.Context, persona Persona, prInfo *PRInfo, globalCont
 		var err error
 		personaContext, err = GetPRContext(prInfo, persona.PathFilters, persona.ExcludeFilters)
 		if err != nil {
-			return ModelResult{}, 0, nil, fmt.Errorf("error getting filtered context: %w", err)
+			return "", ModelResult{}, 0, nil, fmt.Errorf("error getting filtered context: %w", err)
 		}
 		if len(personaContext.ChangedFiles) == 0 {
-			return ModelResult{}, 0, nil, fmt.Errorf("no matching files")
+			return "", ModelResult{}, 0, nil, fmt.Errorf("no matching files")
 		}
 	}
 
 	client, err := GetModelClient(ctx, modelCfg.Provider, modelCfg.Model)
 	if err != nil {
-		return ModelResult{}, 0, nil, fmt.Errorf("error creating client: %w", err)
+		return "", ModelResult{}, 0, nil, fmt.Errorf("error creating client: %w", err)
 	}
 
 	maxTokens := modelCfg.MaxTokens
@@ -56,19 +56,24 @@ func runPersona(ctx context.Context, persona Persona, prInfo *PRInfo, globalCont
 		maxTokens = *maxTokensFlag
 	}
 
-	prompt := buildPrompt(persona, personaContext, config.GlobalInstructions, preRunAnalyses)
+	prompt := buildPrompt(persona, personaContext, config.GlobalInstructions, preRunAnalyses, summary)
 
 	personaCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
 	start := time.Now()
-	result, err := client.Generate(personaCtx, prompt, maxTokens)
+	var result ModelResult
+	if persona.Role == "explainer" && persona.Stage == "pre" {
+		result, err = client.GenerateJSON(personaCtx, prompt, maxTokens)
+	} else {
+		result, err = client.Generate(personaCtx, prompt, maxTokens)
+	}
 	if err != nil {
-		return ModelResult{}, 0, nil, err
+		return prompt, ModelResult{}, 0, nil, err
 	}
 	elapsed := time.Since(start)
 
-	return result, elapsed, personaContext, nil
+	return prompt, result, elapsed, personaContext, nil
 }
 
 func main() {
@@ -77,29 +82,7 @@ func main() {
 		log.Fatalf("Error getting current working directory: %v", err)
 	}
 
-	prCmd := flag.NewFlagSet("pr", flag.ExitOnError)
-	maxTokensFlag := prCmd.Int("max-tokens", 0, "Override max tokens for AI response")
-
-	if len(os.Args) < 2 {
-		fmt.Println("Usage: ai-review pr <repo_owner>/<repo_name> <pr_number> [--max-tokens <int>]")
-		os.Exit(1)
-	}
-
-	if os.Args[1] != "pr" {
-		fmt.Println("Unknown command:", os.Args[1])
-		os.Exit(1)
-	}
-
-	prCmd.Parse(os.Args[2:])
-	args := prCmd.Args()
-
-	if len(args) < 2 {
-		fmt.Println("Usage: ai-review pr <repo_owner>/<repo_name> <pr_number> [--max-tokens <int>]")
-		os.Exit(1)
-	}
-
-	repo := args[0]
-	prNumber := args[1]
+	maxTokensFlag, repo, prNumber := initArgs()
 
 	ctx := context.Background()
 
@@ -212,7 +195,7 @@ func main() {
 	}
 
 	// Prepare clients for normalization and aggregation
-	balancedCfg, ok := config.ModelMapping[string(Balanced)]
+	balancedCfg, ok := config.ModelMapping[string(BestCode)]
 	if !ok {
 		log.Fatalf("Error: 'balanced' model mapping not found in config.yaml")
 	}
@@ -229,6 +212,7 @@ func main() {
 	if err != nil {
 		fastestClient = balancedClient
 	}
+	//goodCfg, ok := config.ModelMapping[string(Goo)]
 
 	// Stage 1: Pre-run Explainers
 	if len(preRunExplainers) > 0 {
@@ -236,13 +220,14 @@ func main() {
 		for _, persona := range preRunExplainers {
 			fmt.Printf("    -> Explainer (Pre): %s\n", persona.ID)
 			// Pre-run personas do NOT get pre-run content from other pre-run personas
-			result, elapsed, _, err := runPersona(ctx, persona, prInfo, globalContext, config, maxTokensFlag, nil)
+			prompt, result, elapsed, _, err := runPersona(ctx, persona, prInfo, globalContext, config, maxTokensFlag, nil, "")
 			if err != nil {
 				fmt.Printf("Error executing pre-run explainer %s: %v, skipping\n", persona.ID, err)
 				continue
 			}
 			fmt.Printf("    <- Finished %s in %s\n", persona.ID, elapsed.Round(time.Millisecond))
 
+			saveToFile(filepath.Join(runDir, persona.ID, "prompt.md"), prompt)
 			saveToFile(filepath.Join(runDir, persona.ID, "raw.md"), result.Text)
 
 			analyses, err := ParsePreRunExplainerOutput(result.Text)
@@ -252,7 +237,7 @@ func main() {
 				parsedData, _ := json.MarshalIndent(analyses, "", "  ")
 				saveToFile(filepath.Join(runDir, persona.ID, "parsed.json"), string(parsedData))
 				for _, a := range analyses {
-					preRunAnalyses[a.File] = append(preRunAnalyses[a.File], a.Analysis)
+					preRunAnalyses[a.File] = append(preRunAnalyses[a.File], fmt.Sprintf("%s: %s", persona.ID, a.Analysis))
 				}
 			}
 
@@ -275,7 +260,7 @@ func main() {
 	fmt.Printf("--- Executing %d reviewers...\n", len(reviewers))
 	for _, persona := range reviewers {
 		fmt.Printf("    -> Reviewer: %s\n", persona.ID)
-		result, elapsed, _, err := runPersona(ctx, persona, prInfo, globalContext, config, maxTokensFlag, preRunAnalyses)
+		prompt, result, elapsed, _, err := runPersona(ctx, persona, prInfo, globalContext, config, maxTokensFlag, preRunAnalyses, "")
 		if err != nil {
 			if err.Error() == "no matching files" {
 				fmt.Printf("    -> No matching files for persona %s, skipping\n", persona.ID)
@@ -286,6 +271,7 @@ func main() {
 		}
 		fmt.Printf("    <- Finished %s in %s\n", persona.ID, elapsed.Round(time.Millisecond))
 
+		saveToFile(filepath.Join(runDir, persona.ID, "prompt.md"), prompt)
 		saveToFile(filepath.Join(runDir, persona.ID, "raw.md"), result.Text)
 
 		// Normalization Step
@@ -329,37 +315,6 @@ func main() {
 		logRun(initialCwd, repo, entry)
 	}
 
-	// Stage 3: Post-run Explainers
-	if len(postRunExplainers) > 0 {
-		fmt.Printf("--- Executing %d post-run explainers...\n", len(postRunExplainers))
-		for _, persona := range postRunExplainers {
-			fmt.Printf("    -> Explainer (Post): %s\n", persona.ID)
-			result, elapsed, _, err := runPersona(ctx, persona, prInfo, globalContext, config, maxTokensFlag, preRunAnalyses)
-			if err != nil {
-				fmt.Printf("Error executing post-run explainer %s: %v, skipping\n", persona.ID, err)
-				continue
-			}
-			fmt.Printf("    <- Finished %s in %s\n", persona.ID, elapsed.Round(time.Millisecond))
-
-			saveToFile(filepath.Join(runDir, persona.ID, "raw.md"), result.Text)
-
-			postRunOutputs = append(postRunOutputs, fmt.Sprintf("### %s\n\n%s", persona.ID, result.Text))
-
-			entry := RunLogEntry{
-				PersonaID:   persona.ID,
-				Model:       result.Model,
-				TokensIn:    result.TokensIn,
-				TokensOut:   result.TokensOut,
-				TimeMS:      elapsed.Milliseconds(),
-				RawOutput:   result.Text,
-				InputPrice:  config.ModelMapping[persona.ModelCategory].InputPricePerMillion,
-				OutputPrice: config.ModelMapping[persona.ModelCategory].OutputPricePerMillion,
-			}
-			stats = append(stats, entry)
-			logRun(initialCwd, repo, entry)
-		}
-	}
-
 	// 7. Aggregation Step
 	fmt.Println("--- Aggregating all findings...")
 	findingsData, _ := json.MarshalIndent(allFindings, "", "  ")
@@ -387,12 +342,71 @@ func main() {
 	stats = append(stats, aggEntry)
 	logRun(initialCwd, repo, aggEntry)
 
+	// Stage 3: Post-run Explainers
+	if len(postRunExplainers) > 0 {
+		fmt.Printf("--- Executing %d post-run explainers...\n", len(postRunExplainers))
+		for _, persona := range postRunExplainers {
+			fmt.Printf("    -> Explainer (Post): %s\n", persona.ID)
+			prompt, result, elapsed, _, err := runPersona(ctx, persona, prInfo, globalContext, config, maxTokensFlag, preRunAnalyses, summary)
+			if err != nil {
+				fmt.Printf("Error executing post-run explainer %s: %v, skipping\n", persona.ID, err)
+				continue
+			}
+			fmt.Printf("    <- Finished %s in %s\n", persona.ID, elapsed.Round(time.Millisecond))
+
+			saveToFile(filepath.Join(runDir, persona.ID, "prompt.md"), prompt)
+			saveToFile(filepath.Join(runDir, persona.ID, "raw.md"), result.Text)
+
+			postRunOutputs = append(postRunOutputs, fmt.Sprintf("### %s\n\n%s", persona.ID, result.Text))
+
+			entry := RunLogEntry{
+				PersonaID:   persona.ID,
+				Model:       result.Model,
+				TokensIn:    result.TokensIn,
+				TokensOut:   result.TokensOut,
+				TimeMS:      elapsed.Milliseconds(),
+				RawOutput:   result.Text,
+				InputPrice:  config.ModelMapping[persona.ModelCategory].InputPricePerMillion,
+				OutputPrice: config.ModelMapping[persona.ModelCategory].OutputPricePerMillion,
+			}
+			stats = append(stats, entry)
+			logRun(initialCwd, repo, entry)
+		}
+	}
+
 	// 8. Report
 	fmt.Println("--- Generating report...")
 	totalElapsed := time.Since(startTimeTotal)
 	report := generateReport(summary, postRunOutputs, stats, totalElapsed)
 	fmt.Print(report)
 	saveToFile(filepath.Join(runDir, "report.md"), report)
+}
+
+func initArgs() (*int, string, string) {
+	prCmd := flag.NewFlagSet("pr", flag.ExitOnError)
+	maxTokensFlag := prCmd.Int("max-tokens", 0, "Override max tokens for AI response")
+
+	if len(os.Args) < 2 {
+		fmt.Println("Usage: ai-review pr <repo_owner>/<repo_name> <pr_number> [--max-tokens <int>]")
+		os.Exit(1)
+	}
+
+	if os.Args[1] != "pr" {
+		fmt.Println("Unknown command:", os.Args[1])
+		os.Exit(1)
+	}
+
+	prCmd.Parse(os.Args[2:])
+	args := prCmd.Args()
+
+	if len(args) < 2 {
+		fmt.Println("Usage: ai-review pr <repo_owner>/<repo_name> <pr_number> [--max-tokens <int>]")
+		os.Exit(1)
+	}
+
+	repo := args[0]
+	prNumber := args[1]
+	return maxTokensFlag, repo, prNumber
 }
 
 func printCurrentDir() {

@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -76,7 +79,39 @@ func GetDiff(baseSHA, headSHA string, includeFilters, excludeFilters []string) (
 	if err != nil {
 		return "", fmt.Errorf("error running git diff: %w, output: %s", err, string(output))
 	}
-	return string(output), nil
+	return AnnotateDiff(string(output)), nil
+}
+
+var hunkHeaderRegexp = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
+
+func AnnotateDiff(diff string) string {
+	var result strings.Builder
+	scanner := bufio.NewScanner(strings.NewReader(diff))
+	currentLine := 0
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "@@ ") {
+			matches := hunkHeaderRegexp.FindStringSubmatch(line)
+			if len(matches) > 1 {
+				startLine, _ := strconv.Atoi(matches[1])
+				currentLine = startLine
+			}
+			result.WriteString(line + "\n")
+		} else if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++ ") {
+			result.WriteString(fmt.Sprintf("%d:%s\n", currentLine, line))
+			currentLine++
+		} else if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "--- ") {
+			result.WriteString(fmt.Sprintf("%d:%s\n", currentLine, line))
+		} else if strings.HasPrefix(line, " ") {
+			result.WriteString(fmt.Sprintf("%d:%s\n", currentLine, line))
+			currentLine++
+		} else {
+			result.WriteString(line + "\n")
+		}
+	}
+
+	return result.String()
 }
 
 func GetChangedFiles(baseSHA, headSHA string, includeFilters, excludeFilters []string) ([]string, error) {
@@ -103,29 +138,82 @@ func GetChangedFiles(baseSHA, headSHA string, includeFilters, excludeFilters []s
 	return files, nil
 }
 
-func buildPrompt(p Persona, ctx *PRContext, globalInstructions string, preRunAnalyses map[string][]string) string {
+func buildPrompt(p Persona, ctx *PRContext, globalInstructions string, preRunAnalyses map[string][]string, summary string) string {
 	var fileList strings.Builder
 	for _, file := range ctx.ChangedFiles {
 		fileList.WriteString(file)
-		if analyses, ok := preRunAnalyses[file]; ok {
-			for _, analysis := range analyses {
-				fileList.WriteString(fmt.Sprintf("\n  - Explainer Analysis: %s", analysis))
+		if len(p.IncludeExplainers) > 0 {
+			if analyses, ok := preRunAnalyses[file]; ok {
+				for _, analysis := range analyses {
+					// Check if this analysis is from one of the included explainers
+					// Analysis format is "PersonaID: description" (based on pipeline.go and how preRunAnalyses is populated)
+					parts := strings.SplitN(analysis, ": ", 2)
+					if len(parts) > 0 {
+						explainerID := parts[0]
+						included := false
+						for _, id := range p.IncludeExplainers {
+							if id == explainerID {
+								included = true
+								break
+							}
+						}
+						if included {
+							fileList.WriteString(fmt.Sprintf("\n  - Explainer Analysis: %s", analysis))
+						}
+					}
+				}
 			}
 		}
 		fileList.WriteString("\n")
 	}
 
-	prompt := fmt.Sprintf(`%s
+	findingsText := ""
+	if p.IncludeFindings && summary != "" {
+		findingsText = fmt.Sprintf("\n\n--- AGGREGATED REPORT ---\n%s\n", summary)
+	}
 
+	diffSection := ""
+	if p.ExcludeDiff {
+		// Calculate diff stats
+		addedLines := 0
+		deletedLines := 0
+		scanner := bufio.NewScanner(strings.NewReader(ctx.Diff))
+		for scanner.Scan() {
+			line := scanner.Text()
+			// Extract original diff line (after line number and colon)
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) < 2 {
+				continue
+			}
+			diffLine := parts[1]
+			if strings.HasPrefix(diffLine, "+") && !strings.HasPrefix(diffLine, "+++ ") {
+				addedLines++
+			} else if strings.HasPrefix(diffLine, "-") && !strings.HasPrefix(diffLine, "--- ") {
+				deletedLines++
+			}
+		}
+		diffSection = fmt.Sprintf("\nDiff Stats: %d files changed, %d lines added, %d lines deleted. (Full diff excluded by configuration)\n", len(ctx.ChangedFiles), addedLines, deletedLines)
+	} else {
+		fence := "```"
+		diffSection = fmt.Sprintf(`
+This is a unified diff format where each line is prefixed with a line number (e.g., "123:"). Lines starting with "-" after the line number indicate removed lines, lines starting with "+" after the line number indicate added lines, and lines starting with " " (space) are unchanged context lines. Diff chunks begin with "@@ -old_start,old_count +new_start,new_count @@" headers that may include function/class context, and are preceded by +++ lines indicating the file being modified.
+
+Unified Diff:
+%sdiff
+%s
+%s
+`, fence, ctx.Diff, fence)
+	}
+
+	prompt := fmt.Sprintf(`%s
+%s
 PR Title: %s
 PR Description: %s
 
 Changed Files:
 %s
-
-Unified Diff:
 %s
-`, p.Instructions, ctx.Title, ctx.Description, fileList.String(), ctx.Diff)
+`, p.Instructions, findingsText, ctx.Title, ctx.Description, fileList.String(), diffSection)
 
 	if globalInstructions != "" {
 		prompt += fmt.Sprintf("\nStandard Instructions:\n%s\n", globalInstructions)

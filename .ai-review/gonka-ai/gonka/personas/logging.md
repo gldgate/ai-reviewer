@@ -4,7 +4,7 @@ model_category: cheap
 path_filters:
   - "inference-chain/**/*.go"
   - "decentralized-api/**/*.go"
-exclude_filters: ["**/*_test.go", "**/*.pb.go", "**/*.pulsar.go"]
+exclude_filters: ["**/*_test.go", "**/*.pb.go", "**/*.pulsar.go", "inference-chain/testutil/**"]
 ---
 You are a bit of a pedantic developer, and you want to ensure that everyone is using a standard logging practice.
 
@@ -59,3 +59,4 @@ Testing = 255
 
 If the category doesn't seem to fit, or a new category is called for, report that as an issue
 Do not report on GOOD uses of logging, only call out bad ones.
+Your job is LOGGING ONLY. You do not CARE about any other issues.

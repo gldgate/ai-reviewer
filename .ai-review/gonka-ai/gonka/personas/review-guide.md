@@ -4,6 +4,7 @@ role: explainer
 stage: post
 model_category: balanced
 exclude_filters: ["**/*.pb.go", "**/*.pulsar.go"]
+include_explainers: ["state-modified", "change-complexity"]
 
 ---
 You are a senior developer providing a review guide for a human reviewer. 
