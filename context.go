@@ -17,6 +17,7 @@ type PRInfo struct {
 	BaseRefOid  string `json:"baseRefOid"`
 	HeadRefName string `json:"headRefName"`
 	HeadRefOid  string `json:"headRefOid"`
+	IsCommit    bool
 }
 
 type PRContext struct {
@@ -42,6 +43,61 @@ func GetPRInfo(repo, prNumber string) (*PRInfo, error) {
 	return &pr, nil
 }
 
+func GetCommitInfo(commitHash, compareTo string) (*PRInfo, error) {
+	fmt.Printf("    -> Getting info for commit %s...\n", commitHash)
+
+	// Get commit message (title and body)
+	cmd := exec.Command("git", "show", "-s", "--format=%s%n%n%b", commitHash)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("error getting commit message: %w, output: %s", err, string(output))
+	}
+
+	fullMsg := strings.TrimSpace(string(output))
+	parts := strings.SplitN(fullMsg, "\n", 2)
+	title := parts[0]
+	body := ""
+	if len(parts) > 1 {
+		body = strings.TrimSpace(parts[1])
+	}
+
+	// Get full SHA for head
+	cmd = exec.Command("git", "rev-parse", commitHash)
+	headSHA, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("error resolving commit hash: %w", err)
+	}
+
+	baseSHA := compareTo
+	if baseSHA == "" {
+		// Default to parent commit
+		cmd = exec.Command("git", "rev-parse", commitHash+"^")
+		out, err := cmd.Output()
+		if err != nil {
+			return nil, fmt.Errorf("error getting parent commit: %w", err)
+		}
+		baseSHA = strings.TrimSpace(string(out))
+	} else {
+		// Resolve compareTo to full SHA
+		cmd = exec.Command("git", "rev-parse", compareTo)
+		out, err := cmd.Output()
+		if err != nil {
+			return nil, fmt.Errorf("error resolving comparison commit: %w", err)
+		}
+		baseSHA = strings.TrimSpace(string(out))
+	}
+
+	return &PRInfo{
+		Title:       title,
+		Body:        body,
+		BaseRefOid:  baseSHA,
+		HeadRefOid:  strings.TrimSpace(string(headSHA)),
+		IsCommit:    true,
+		BaseRefName: baseSHA[:8], // Short SHA for display
+		HeadRefName: strings.TrimSpace(string(headSHA))[:8],
+	}, nil
+}
+
 func GetPRContext(prInfo *PRInfo, includeFilters, excludeFilters []string) (*PRContext, error) {
 	diff, err := GetDiff(prInfo.BaseRefOid, prInfo.HeadRefOid, includeFilters, excludeFilters)
 	if err != nil {
@@ -62,7 +118,12 @@ func GetPRContext(prInfo *PRInfo, includeFilters, excludeFilters []string) (*PRC
 }
 
 func GetDiff(baseSHA, headSHA string, includeFilters, excludeFilters []string) (string, error) {
-	// Use ... for triple-dot diff (find common ancestor)
+	// Triple-dot (A...B) means diff from common ancestor of A and B to B.
+	// Double-dot (A..B) means diff from A to B.
+	// For PRs we usually want triple-dot.
+	// For "ai-review commit" we probably want double-dot if a base is specified,
+	// or triple-dot if comparing to parent (which ends up being same as double-dot).
+	// Let's use triple-dot as it's generally safer for PR-like workflows.
 	args := []string{"diff", fmt.Sprintf("%s...%s", baseSHA, headSHA)}
 	if len(includeFilters) > 0 || len(excludeFilters) > 0 {
 		args = append(args, "--")

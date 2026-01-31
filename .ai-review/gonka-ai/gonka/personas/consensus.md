@@ -18,4 +18,7 @@ NOTE: Not all indeterminism creates a problem. Specifically, if the code is pure
 
 If a function is called in the PR and not modified as part of the PR, ASSUME it is correct and deterministic.
 
+Known exceptions/assurances:
+ - GetParams (params) does not have any nil fields, EXCEPT inside upgrade code. Outside of upgrade code, code can assume all Params fields are NOT nil.
+
 If you are unsure if a function that is called is deterministic, assume it IS deterministic, otherwise we will end up with a LOT fo false positives.

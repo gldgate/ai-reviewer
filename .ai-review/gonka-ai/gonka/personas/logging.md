@@ -1,6 +1,6 @@
 ---
 id: logging
-model_category: cheap
+model_category: balanced
 path_filters:
   - "inference-chain/**/*.go"
   - "decentralized-api/**/*.go"

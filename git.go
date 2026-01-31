@@ -71,23 +71,53 @@ func isRelatedRepo(repo, repoName string) bool {
 func FetchRefs(repo, prNumber, baseRef string) error {
 	remote := fmt.Sprintf("https://github.com/%s.git", repo)
 
-	// Fetch base branch
-	fmt.Printf("    -> Fetching base branch %s...\n", baseRef)
-	cmd := exec.Command("git", "fetch", remote, baseRef)
-	if _, err := cmd.CombinedOutput(); err != nil {
-		// If it fails, try fetching origin as fallback
-		exec.Command("git", "fetch", "origin", baseRef).Run()
-	}
+	if prNumber != "" {
+		// Fetch base branch
+		fmt.Printf("    -> Fetching base branch %s...\n", baseRef)
+		cmd := exec.Command("git", "fetch", remote, baseRef)
+		if _, err := cmd.CombinedOutput(); err != nil {
+			// If it fails, try fetching origin as fallback
+			exec.Command("git", "fetch", "origin", baseRef).Run()
+		}
 
-	// Fetch PR head
-	// GitHub exposes PRs at refs/pull/ID/head
-	fmt.Printf("    -> Fetching PR head refs/pull/%s/head...\n", prNumber)
-	cmd = exec.Command("git", "fetch", remote, fmt.Sprintf("refs/pull/%s/head", prNumber))
+		// Fetch PR head
+		// GitHub exposes PRs at refs/pull/ID/head
+		fmt.Printf("    -> Fetching PR head refs/pull/%s/head...\n", prNumber)
+		cmd = exec.Command("git", "fetch", remote, fmt.Sprintf("refs/pull/%s/head", prNumber))
+		if out, err := cmd.CombinedOutput(); err != nil {
+			// Fallback to origin if remote URL fails
+			cmd = exec.Command("git", "fetch", "origin", fmt.Sprintf("refs/pull/%s/head", prNumber))
+			if out2, err2 := cmd.CombinedOutput(); err2 != nil {
+				return fmt.Errorf("failed to fetch PR head from %s or origin: %v (out1: %s, out2: %s)", remote, err2, string(out), string(out2))
+			}
+		}
+	} else {
+		// Just fetch the repo to make sure we have latest objects
+		fmt.Printf("    -> Fetching latest from remote...\n")
+		exec.Command("git", "fetch", "origin").Run()
+	}
+	return nil
+}
+
+func FetchCommit(repo, commitHash string) error {
+	remote := fmt.Sprintf("https://github.com/%s.git", repo)
+	fmt.Printf("    -> Fetching commit %s from %s...\n", commitHash, remote)
+
+	// Try fetching from the explicit remote URL first
+	cmd := exec.Command("git", "fetch", remote, commitHash)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		// Fallback to origin if remote URL fails
-		cmd = exec.Command("git", "fetch", "origin", fmt.Sprintf("refs/pull/%s/head", prNumber))
+		// Fallback to origin
+		cmd = exec.Command("git", "fetch", "origin", commitHash)
 		if out2, err2 := cmd.CombinedOutput(); err2 != nil {
-			return fmt.Errorf("failed to fetch PR head from %s or origin: %v (out1: %s, out2: %s)", remote, err2, string(out), string(out2))
+			// If fetching the specific commit fails, try a general fetch as a last resort
+			// Some servers might not allow fetching by SHA directly if it's not a tip of a ref
+			fmt.Printf("    -> Specific fetch failed, trying general fetch...\n")
+			exec.Command("git", "fetch", "origin").Run()
+
+			// Check if we have it now
+			if exec.Command("git", "rev-parse", "--verify", commitHash).Run() != nil {
+				return fmt.Errorf("failed to fetch commit %s: %v (out1: %s, out2: %s)", commitHash, err2, string(out), string(out2))
+			}
 		}
 	}
 	return nil

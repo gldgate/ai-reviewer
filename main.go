@@ -82,7 +82,7 @@ func main() {
 		log.Fatalf("Error getting current working directory: %v", err)
 	}
 
-	maxTokensFlag, repo, prNumber := initArgs()
+	maxTokensFlag, repo, prNumber, commitHash, compareTo := initArgs()
 
 	ctx := context.Background()
 
@@ -101,26 +101,57 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// 2. Resolve PR info first to get base branch
-	fmt.Printf("--- Fetching PR info for %s #%s...\n", repo, prNumber)
-	prInfo, err := GetPRInfo(repo, prNumber)
-	if err != nil {
-		log.Fatalf("Error getting PR info: %v", err)
+	// 2. Resolve target info
+	var prInfo *PRInfo
+	if commitHash != "" {
+		// If it's a commit, we need to ensure repo is present first to use git commands
+		fmt.Printf("--- Ensuring repo %s is available...\n", repo)
+		if err := EnsureRepo(repo); err != nil {
+			log.Fatalf("Error ensuring repo: %v", err)
+		}
+
+		// Ensure we have the commit
+		fmt.Printf("--- Fetching commit %s...\n", commitHash)
+		if err := FetchCommit(repo, commitHash); err != nil {
+			log.Fatalf("Error fetching commit: %v", err)
+		}
+
+		// Also fetch comparison commit if specified
+		if compareTo != "" {
+			fmt.Printf("--- Fetching comparison commit %s...\n", compareTo)
+			if err := FetchCommit(repo, compareTo); err != nil {
+				log.Fatalf("Error fetching comparison commit: %v", err)
+			}
+		}
+
+		fmt.Printf("--- Fetching commit info for %s...\n", commitHash)
+		prInfo, err = GetCommitInfo(commitHash, compareTo)
+		if err != nil {
+			log.Fatalf("Error getting commit info: %v", err)
+		}
+	} else {
+		fmt.Printf("--- Fetching PR info for %s #%s...\n", repo, prNumber)
+		prInfo, err = GetPRInfo(repo, prNumber)
+		if err != nil {
+			log.Fatalf("Error getting PR info: %v", err)
+		}
 	}
 	printCurrentDir()
 
-	// 3. Ensure we are in the repo and have the refs
-	fmt.Printf("--- Ensuring local repository for %s...\n", repo)
-	if err := EnsureRepo(repo); err != nil {
-		log.Fatalf("Error ensuring repo: %v", err)
-	}
-	printCurrentDir()
+	// 3. Ensure repo and fetch refs (for PRs)
+	if commitHash == "" {
+		fmt.Printf("--- Ensuring local repository for %s...\n", repo)
+		if err := EnsureRepo(repo); err != nil {
+			log.Fatalf("Error ensuring repo: %v", err)
+		}
+		printCurrentDir()
 
-	fmt.Printf("--- Fetching git refs (base: %s)...\n", prInfo.BaseRefName)
-	if err := FetchRefs(repo, prNumber, prInfo.BaseRefName); err != nil {
-		log.Fatalf("Error fetching refs: %v", err)
+		fmt.Printf("--- Fetching git refs (base: %s)...\n", prInfo.BaseRefName)
+		if err := FetchRefs(repo, prNumber, prInfo.BaseRefName); err != nil {
+			log.Fatalf("Error fetching refs: %v", err)
+		}
+		printCurrentDir()
 	}
-	printCurrentDir()
 
 	// 4. Load config and personas
 	fmt.Println("--- Loading configuration and personas...")
@@ -164,7 +195,11 @@ func main() {
 
 	// 5a. Create run directory
 	runID := time.Now().Format("2006-01-02_15-04-05")
-	runDir := filepath.Join(initialCwd, ".ai-review", repo, "runs", prNumber, runID)
+	targetID := prNumber
+	if commitHash != "" {
+		targetID = commitHash[:8]
+	}
+	runDir := filepath.Join(initialCwd, ".ai-review", repo, "runs", targetID, runID)
 	if err := os.MkdirAll(runDir, 0755); err != nil {
 		log.Fatalf("Error creating run directory: %v", err)
 	}
@@ -377,36 +412,53 @@ func main() {
 	// 8. Report
 	fmt.Println("--- Generating report...")
 	totalElapsed := time.Since(startTimeTotal)
-	report := generateReport(summary, postRunOutputs, stats, totalElapsed)
+	report := generateReport(prNumber, commitHash, prInfo.BaseRefOid, prInfo.HeadRefOid, summary, postRunOutputs, stats, totalElapsed)
 	fmt.Print(report)
 	saveToFile(filepath.Join(runDir, "report.md"), report)
 }
 
-func initArgs() (*int, string, string) {
+func initArgs() (*int, string, string, string, string) {
 	prCmd := flag.NewFlagSet("pr", flag.ExitOnError)
-	maxTokensFlag := prCmd.Int("max-tokens", 0, "Override max tokens for AI response")
+	prMaxTokens := prCmd.Int("max-tokens", 0, "Override max tokens for AI response")
+
+	commitCmd := flag.NewFlagSet("commit", flag.ExitOnError)
+	commitMaxTokens := commitCmd.Int("max-tokens", 0, "Override max tokens for AI response")
+	compareTo := commitCmd.String("compare-to", "", "Specific commit to compare to (default: parent)")
 
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: ai-review pr <repo_owner>/<repo_name> <pr_number> [--max-tokens <int>]")
+		printUsage()
 		os.Exit(1)
 	}
 
-	if os.Args[1] != "pr" {
+	switch os.Args[1] {
+	case "pr":
+		prCmd.Parse(os.Args[2:])
+		args := prCmd.Args()
+		if len(args) < 2 {
+			printUsage()
+			os.Exit(1)
+		}
+		return prMaxTokens, args[0], args[1], "", ""
+	case "commit":
+		commitCmd.Parse(os.Args[2:])
+		args := commitCmd.Args()
+		if len(args) < 2 {
+			printUsage()
+			os.Exit(1)
+		}
+		return commitMaxTokens, args[0], "", args[1], *compareTo
+	default:
 		fmt.Println("Unknown command:", os.Args[1])
+		printUsage()
 		os.Exit(1)
 	}
+	return nil, "", "", "", ""
+}
 
-	prCmd.Parse(os.Args[2:])
-	args := prCmd.Args()
-
-	if len(args) < 2 {
-		fmt.Println("Usage: ai-review pr <repo_owner>/<repo_name> <pr_number> [--max-tokens <int>]")
-		os.Exit(1)
-	}
-
-	repo := args[0]
-	prNumber := args[1]
-	return maxTokensFlag, repo, prNumber
+func printUsage() {
+	fmt.Println("Usage:")
+	fmt.Println("  ai-review pr <repo_owner>/<repo_name> <pr_number> [--max-tokens <int>]")
+	fmt.Println("  ai-review commit <repo_owner>/<repo_name> <commit_hash> [--compare-to <hash>] [--max-tokens <int>]")
 }
 
 func printCurrentDir() {
@@ -455,9 +507,16 @@ func saveToFile(path, content string) {
 	}
 }
 
-func generateReport(summary string, postRunOutputs []string, stats []RunLogEntry, totalTime time.Duration) string {
+func generateReport(prNumber, commitHash, baseSHA, headSHA, summary string, postRunOutputs []string, stats []RunLogEntry, totalTime time.Duration) string {
 	var out strings.Builder
-	out.WriteString("# AI PR Review Report\n\n")
+	out.WriteString("# AI Review Report\n\n")
+	if prNumber != "" {
+		out.WriteString(fmt.Sprintf("## PR #%s\n", prNumber))
+	} else {
+		out.WriteString(fmt.Sprintf("## Commit %s\n", headSHA[:8]))
+	}
+	out.WriteString(fmt.Sprintf("- **Base Commit:** `%s`\n", baseSHA))
+	out.WriteString(fmt.Sprintf("- **Head Commit:** `%s`\n\n", headSHA))
 	out.WriteString(summary)
 	out.WriteString("\n\n")
 

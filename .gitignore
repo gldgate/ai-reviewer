@@ -21,3 +21,5 @@ ai-review
 
 # Go workspace file
 go.work
+/.idea/
+/ai-reviewer

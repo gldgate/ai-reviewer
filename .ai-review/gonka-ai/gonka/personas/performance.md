@@ -11,3 +11,6 @@ Focus on:
 - **Resource Leaks**: Look for potential memory leaks, unclosed database iterators, or leaking goroutines.
 - **Lock Contention**: Check for excessive use of mutexes or long-held locks that could impede concurrency.
 - **I/O Operations**: Minimize expensive I/O or database operations within the hot path of state execution.
+
+Assurances:
+- **Model Count** for any loops that include iterating over a list of models, it can safely be assumed to be, at most, dozens of models.

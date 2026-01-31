@@ -83,12 +83,23 @@ A `.gitignore` file is provided in the project root to ensure that the `.repos` 
 
 ```bash
 go build -o ai-review
+# Review a PR
 ./ai-review pr <repo_owner>/<repo_name> <pr_number> [--max-tokens <int>]
+
+# Review a specific commit (compared to its parent by default)
+./ai-review commit <repo_owner>/<repo_name> <commit_hash> [--compare-to <hash>] [--max-tokens <int>]
 ```
 
-Example:
+Examples:
 ```bash
+# Review PR #1234
 ./ai-review pr google/go-github 1234 --max-tokens 500
+
+# Review commit abc1234
+./ai-review commit google/go-github abc1234
+
+# Review commit abc1234 compared to def5678
+./ai-review commit google/go-github abc1234 --compare-to def5678
 ```
 
 ## How it works
@@ -104,7 +115,8 @@ The tool executes a multi-stage pipeline:
 
 ## Output and Artifacts
 
-Each run generates a timestamped directory in `.ai-review/<repo_owner>/<repo_name>/runs/<pr_number>/<timestamp>/` containing:
+Each run generates a timestamped directory in `.ai-review/<repo_owner>/<repo_name>/runs/<target_id>/<timestamp>/` containing:
+- `target_id` is the PR number (for PR reviews) or the short commit hash (for commit reviews).
 - `summary.md`: The aggregated Markdown summary.
 - `report.md`: The full report including explanations and stats.
 - `all_findings.json`: All normalized findings from all personas.
