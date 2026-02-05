@@ -15,6 +15,7 @@ type Persona struct {
 	MaxTokens         int      `yaml:"max_tokens"`
 	PathFilters       []string `yaml:"path_filters"`
 	ExcludeFilters    []string `yaml:"exclude_filters"`
+	RegexFilters      []string `yaml:"regex_filters"`
 	Role              string   `yaml:"role"`  // reviewer (default) | explainer
 	Stage             string   `yaml:"stage"` // pre | post
 	IncludeFindings   bool     `yaml:"include_findings"`

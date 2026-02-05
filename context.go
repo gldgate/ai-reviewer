@@ -5,19 +5,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 )
 
 type PRInfo struct {
-	Title       string `json:"title"`
-	Body        string `json:"body"`
-	BaseRefName string `json:"baseRefName"`
-	BaseRefOid  string `json:"baseRefOid"`
-	HeadRefName string `json:"headRefName"`
-	HeadRefOid  string `json:"headRefOid"`
-	IsCommit    bool
+	Title        string   `json:"title"`
+	Body         string   `json:"body"`
+	BaseRefName  string   `json:"baseRefName"`
+	BaseRefOid   string   `json:"baseRefOid"`
+	HeadRefName  string   `json:"headRefName"`
+	HeadRefOid   string   `json:"headRefOid"`
+	IsCommit     bool     `json:"isCommit"`
+	FilePatterns []string `json:"filePatterns"`
 }
 
 type PRContext struct {
@@ -98,7 +100,101 @@ func GetCommitInfo(commitHash, compareTo string) (*PRInfo, error) {
 	}, nil
 }
 
-func GetPRContext(prInfo *PRInfo, includeFilters, excludeFilters []string) (*PRContext, error) {
+func GetFileInfo(repo, branch string, filePatterns []string) (*PRInfo, error) {
+	fmt.Printf("    -> Getting info for branch %s, files %v...\n", branch, filePatterns)
+
+	// Get head SHA of branch
+	cmd := exec.Command("git", "rev-parse", branch)
+	headSHAOut, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("error resolving branch %s: %w", branch, err)
+	}
+	headSHA := strings.TrimSpace(string(headSHAOut))
+
+	// Resolve patterns to actual files
+	files, err := GetFilesForPatterns(branch, filePatterns, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(files) == 0 {
+		return nil, fmt.Errorf("no files found matching patterns %v on branch %s", filePatterns, branch)
+	}
+
+	return &PRInfo{
+		Title:        fmt.Sprintf("Review of %d files on %s", len(files), branch),
+		Body:         fmt.Sprintf("Reviewing files: %s", strings.Join(files, ", ")),
+		BaseRefOid:   headSHA, // We'll use this as a hack for GetPRContext
+		HeadRefOid:   headSHA,
+		IsCommit:     false,
+		BaseRefName:  branch,
+		HeadRefName:  branch,
+		FilePatterns: filePatterns,
+	}, nil
+}
+
+func GetPRContext(prInfo *PRInfo, includeFilters, excludeFilters, regexFilters []string) (*PRContext, error) {
+	if prInfo.BaseRefOid == prInfo.HeadRefOid && !prInfo.IsCommit && prInfo.BaseRefOid != "" {
+		// This is "file" mode, we want to see the whole content of the files as if it were a new file
+		files, err := GetFilesForPatterns(prInfo.HeadRefOid, includeFilters, excludeFilters)
+		if err != nil {
+			return nil, err
+		}
+
+		var finalFiles []string
+		var diffBuilder strings.Builder
+
+		var compiledRegexes []*regexp.Regexp
+		for _, r := range regexFilters {
+			re, err := regexp.Compile(r)
+			if err != nil {
+				return nil, fmt.Errorf("invalid regex %s: %w", r, err)
+			}
+			compiledRegexes = append(compiledRegexes, re)
+		}
+
+		for _, file := range files {
+			// Get content of the file at HeadRefOid
+			cmd := exec.Command("git", "show", fmt.Sprintf("%s:%s", prInfo.HeadRefOid, file))
+			content, err := cmd.Output()
+			if err != nil {
+				// Maybe it's a directory or doesn't exist anymore
+				continue
+			}
+
+			contentStr := string(content)
+			matches := len(regexFilters) == 0
+			if !matches {
+				for _, re := range compiledRegexes {
+					if re.MatchString(contentStr) {
+						matches = true
+						break
+					}
+				}
+			}
+
+			if !matches {
+				continue
+			}
+
+			finalFiles = append(finalFiles, file)
+			diffBuilder.WriteString(fmt.Sprintf("+++ b/%s\n", file))
+			lines := strings.Split(contentStr, "\n")
+			// Fake a diff chunk
+			diffBuilder.WriteString(fmt.Sprintf("@@ -0,0 +1,%d @@\n", len(lines)))
+			for _, line := range lines {
+				diffBuilder.WriteString("+" + line + "\n")
+			}
+		}
+
+		return &PRContext{
+			Title:        prInfo.Title,
+			Description:  prInfo.Body,
+			ChangedFiles: finalFiles,
+			Diff:         AnnotateDiff(diffBuilder.String()),
+		}, nil
+	}
+
 	diff, err := GetDiff(prInfo.BaseRefOid, prInfo.HeadRefOid, includeFilters, excludeFilters)
 	if err != nil {
 		return nil, err
@@ -109,12 +205,130 @@ func GetPRContext(prInfo *PRInfo, includeFilters, excludeFilters []string) (*PRC
 		return nil, err
 	}
 
+	if len(regexFilters) > 0 {
+		var compiledRegexes []*regexp.Regexp
+		for _, r := range regexFilters {
+			re, err := regexp.Compile(r)
+			if err != nil {
+				return nil, fmt.Errorf("invalid regex %s: %w", r, err)
+			}
+			compiledRegexes = append(compiledRegexes, re)
+		}
+
+		var filteredFiles []string
+		var filteredDiffBuilder strings.Builder
+
+		// Split diff into files
+		// Git diff output starts with "diff --git" for each file
+		fileDiffs := strings.Split(diff, "diff --git ")
+		for i, fd := range fileDiffs {
+			if i == 0 && !strings.HasPrefix(fd, "diff --git ") && fd != "" {
+				// Header before first file diff if any
+				continue
+			}
+			if fd == "" {
+				continue
+			}
+
+			fullFd := "diff --git " + fd
+			// Extract filename
+			// +++ b/filename
+			lines := strings.Split(fullFd, "\n")
+			var filename string
+			for _, line := range lines {
+				if strings.HasPrefix(line, "+++ b/") {
+					filename = strings.TrimPrefix(line, "+++ b/")
+					break
+				}
+			}
+
+			// Check regex against added lines in this file diff
+			matches := false
+			for _, line := range lines {
+				// Extract original diff line (after line number and colon from AnnotateDiff)
+				parts := strings.SplitN(line, ":", 2)
+				if len(parts) < 2 {
+					continue
+				}
+				diffLine := parts[1]
+
+				if strings.HasPrefix(diffLine, "+") && !strings.HasPrefix(diffLine, "+++ ") {
+					addedContent := strings.TrimPrefix(diffLine, "+")
+					for _, re := range compiledRegexes {
+						if re.MatchString(addedContent) {
+							matches = true
+							break
+						}
+					}
+				}
+				if matches {
+					break
+				}
+			}
+
+			if matches {
+				filteredFiles = append(filteredFiles, filename)
+				filteredDiffBuilder.WriteString(fullFd)
+			}
+		}
+		files = filteredFiles
+		diff = filteredDiffBuilder.String()
+	}
+
 	return &PRContext{
 		Title:        prInfo.Title,
 		Description:  prInfo.Body,
 		ChangedFiles: files,
 		Diff:         diff,
 	}, nil
+}
+
+func GetFilesForPatterns(branch string, includeFilters, excludeFilters []string) ([]string, error) {
+	cmd := exec.Command("git", "ls-tree", "-r", "--name-only", branch)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("error running git ls-tree: %w", err)
+	}
+	allFiles := strings.Split(strings.TrimSpace(string(out)), "\n")
+
+	var result []string
+	for _, file := range allFiles {
+		if file == "" {
+			continue
+		}
+
+		included := false
+		if len(includeFilters) == 0 {
+			included = true
+		} else {
+			for _, pattern := range includeFilters {
+				matched, _ := filepath.Match(pattern, file)
+				if matched || strings.Contains(file, pattern) {
+					included = true
+					break
+				}
+			}
+		}
+
+		if !included {
+			continue
+		}
+
+		excluded := false
+		for _, ex := range excludeFilters {
+			matched, _ := filepath.Match(ex, file)
+			if matched || strings.Contains(file, ex) {
+				excluded = true
+				break
+			}
+		}
+
+		if !excluded {
+			result = append(result, file)
+		}
+	}
+
+	return result, nil
 }
 
 func GetDiff(baseSHA, headSHA string, includeFilters, excludeFilters []string) (string, error) {

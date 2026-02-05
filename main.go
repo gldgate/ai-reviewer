@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -32,9 +33,16 @@ func runPersona(ctx context.Context, persona Persona, prInfo *PRInfo, globalCont
 	}
 
 	personaContext := globalContext
-	if len(persona.PathFilters) > 0 || len(persona.ExcludeFilters) > 0 {
+	if len(persona.PathFilters) > 0 || len(persona.ExcludeFilters) > 0 || len(persona.RegexFilters) > 0 || (prInfo.BaseRefOid == prInfo.HeadRefOid && !prInfo.IsCommit && prInfo.BaseRefOid != "") {
 		var err error
-		personaContext, err = GetPRContext(prInfo, persona.PathFilters, persona.ExcludeFilters)
+		// If it's file mode, we MUST call GetPRContext with the command line patterns as include filters
+		// unless the persona has its own filters.
+		includes := persona.PathFilters
+		if len(includes) == 0 && prInfo.BaseRefOid == prInfo.HeadRefOid && !prInfo.IsCommit {
+			includes = prInfo.FilePatterns
+		}
+
+		personaContext, err = GetPRContext(prInfo, includes, persona.ExcludeFilters, persona.RegexFilters)
 		if err != nil {
 			return "", ModelResult{}, 0, nil, fmt.Errorf("error getting filtered context: %w", err)
 		}
@@ -82,7 +90,7 @@ func main() {
 		log.Fatalf("Error getting current working directory: %v", err)
 	}
 
-	maxTokensFlag, repo, prNumber, commitHash, compareTo := initArgs()
+	maxTokensFlag, concurrencyFlag, repo, prNumber, commitHash, compareTo, filePatterns := initArgs()
 
 	ctx := context.Background()
 
@@ -103,7 +111,21 @@ func main() {
 
 	// 2. Resolve target info
 	var prInfo *PRInfo
-	if commitHash != "" {
+	if filePatterns != nil {
+		fmt.Printf("--- Ensuring repo %s is available...\n", repo)
+		if err := EnsureRepo(repo); err != nil {
+			log.Fatalf("Error ensuring repo: %v", err)
+		}
+
+		if err := FetchRefs(repo, "", commitHash); err != nil { // commitHash is used as branch here
+			log.Fatalf("Error fetching branch: %v", err)
+		}
+
+		prInfo, err = GetFileInfo(repo, commitHash, filePatterns)
+		if err != nil {
+			log.Fatalf("Error getting file info: %v", err)
+		}
+	} else if commitHash != "" {
 		// If it's a commit, we need to ensure repo is present first to use git commands
 		fmt.Printf("--- Ensuring repo %s is available...\n", repo)
 		if err := EnsureRepo(repo); err != nil {
@@ -188,7 +210,12 @@ func main() {
 
 	// 5. Extract context
 	fmt.Println("--- Extracting PR context...")
-	globalContext, err := GetPRContext(prInfo, nil, nil)
+	var globalContext *PRContext
+	if filePatterns != nil {
+		globalContext, err = GetPRContext(prInfo, filePatterns, nil, nil)
+	} else {
+		globalContext, err = GetPRContext(prInfo, nil, nil, nil)
+	}
 	if err != nil {
 		log.Fatalf("Error getting context: %v", err)
 	}
@@ -196,8 +223,10 @@ func main() {
 	// 5a. Create run directory
 	runID := time.Now().Format("2006-01-02_15-04-05")
 	targetID := prNumber
-	if commitHash != "" {
-		targetID = commitHash[:8]
+	if filePatterns != nil {
+		targetID = "file-" + commitHash // branch name
+	} else if commitHash != "" {
+		targetID = commitHash
 	}
 	runDir := filepath.Join(initialCwd, ".ai-review", repo, "runs", targetID, runID)
 	if err := os.MkdirAll(runDir, 0755); err != nil {
@@ -211,6 +240,17 @@ func main() {
 	var postRunOutputs []string
 	preRunAnalyses := make(map[string][]string)
 	startTimeTotal := time.Now()
+
+	var statsMu sync.Mutex
+	var findingsMu sync.Mutex
+	var postRunOutputsMu sync.Mutex
+	var preRunAnalysesMu sync.Mutex
+
+	concurrency := 3
+	if concurrencyFlag != nil {
+		concurrency = *concurrencyFlag
+	}
+	sem := make(chan struct{}, concurrency)
 
 	// Categorize personas
 	var preRunExplainers []Persona
@@ -252,29 +292,116 @@ func main() {
 	// Stage 1: Pre-run Explainers
 	if len(preRunExplainers) > 0 {
 		fmt.Printf("--- Executing %d pre-run explainers...\n", len(preRunExplainers))
+		var wg sync.WaitGroup
 		for _, persona := range preRunExplainers {
-			fmt.Printf("    -> Explainer (Pre): %s\n", persona.ID)
-			// Pre-run personas do NOT get pre-run content from other pre-run personas
-			prompt, result, elapsed, _, err := runPersona(ctx, persona, prInfo, globalContext, config, maxTokensFlag, nil, "")
+			wg.Add(1)
+			go func(persona Persona) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				fmt.Printf("    -> Explainer (Pre): %s\n", persona.ID)
+				// Pre-run personas do NOT get pre-run content from other pre-run personas
+				prompt, result, elapsed, _, err := runPersona(ctx, persona, prInfo, globalContext, config, maxTokensFlag, nil, "")
+				if err != nil {
+					if err.Error() == "no matching files" {
+						fmt.Printf("    -> No matching files for persona %s, skipping\n", persona.ID)
+					} else {
+						fmt.Printf("Error executing pre-run explainer %s: %v, skipping\n", persona.ID, err)
+					}
+					return
+				}
+				fmt.Printf("    <- Finished %s in %s\n", persona.ID, elapsed.Round(time.Millisecond))
+
+				saveToFile(filepath.Join(runDir, persona.ID, "prompt.md"), prompt)
+				saveToFile(filepath.Join(runDir, persona.ID, "raw.md"), result.Text)
+
+				analyses, err := ParsePreRunExplainerOutput(result.Text)
+				if err != nil {
+					fmt.Printf("Warning: error parsing pre-run explainer output for %s: %v\n", persona.ID, err)
+				} else {
+					parsedData, _ := json.MarshalIndent(analyses, "", "  ")
+					saveToFile(filepath.Join(runDir, persona.ID, "parsed.json"), string(parsedData))
+					preRunAnalysesMu.Lock()
+					for _, a := range analyses {
+						preRunAnalyses[a.File] = append(preRunAnalyses[a.File], fmt.Sprintf("%s: %s", persona.ID, a.Analysis))
+					}
+					preRunAnalysesMu.Unlock()
+				}
+
+				entry := RunLogEntry{
+					PersonaID:   persona.ID,
+					Model:       result.Model,
+					TokensIn:    result.TokensIn,
+					TokensOut:   result.TokensOut,
+					TimeMS:      elapsed.Milliseconds(),
+					RawOutput:   result.Text,
+					InputPrice:  config.ModelMapping[persona.ModelCategory].InputPricePerMillion,
+					OutputPrice: config.ModelMapping[persona.ModelCategory].OutputPricePerMillion,
+				}
+				statsMu.Lock()
+				stats = append(stats, entry)
+				statsMu.Unlock()
+				logRun(initialCwd, repo, entry)
+			}(persona)
+		}
+		wg.Wait()
+	}
+
+	// Stage 2: Reviewers
+	fmt.Printf("--- Executing %d reviewers...\n", len(reviewers))
+	var wg sync.WaitGroup
+	for _, persona := range reviewers {
+		wg.Add(1)
+		go func(persona Persona) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			fmt.Printf("    -> Reviewer: %s\n", persona.ID)
+			prompt, result, elapsed, _, err := runPersona(ctx, persona, prInfo, globalContext, config, maxTokensFlag, preRunAnalyses, "")
 			if err != nil {
-				fmt.Printf("Error executing pre-run explainer %s: %v, skipping\n", persona.ID, err)
-				continue
+				if err.Error() == "no matching files" {
+					fmt.Printf("    -> No matching files for persona %s, skipping\n", persona.ID)
+				} else {
+					fmt.Printf("Error executing reviewer %s (type: %T): %v, skipping\n", persona.ID, err, err)
+				}
+				return
 			}
 			fmt.Printf("    <- Finished %s in %s\n", persona.ID, elapsed.Round(time.Millisecond))
 
 			saveToFile(filepath.Join(runDir, persona.ID, "prompt.md"), prompt)
 			saveToFile(filepath.Join(runDir, persona.ID, "raw.md"), result.Text)
 
-			analyses, err := ParsePreRunExplainerOutput(result.Text)
+			// Normalization Step
+			fmt.Printf("    -> Normalizing findings for %s...\n", persona.ID)
+			normStart := time.Now()
+			findings, normResult, err := NormalizePersonaOutput(ctx, fastestClient, persona.ID, result.Text)
+			normElapsed := time.Since(normStart)
 			if err != nil {
-				fmt.Printf("Warning: error parsing pre-run explainer output for %s: %v\n", persona.ID, err)
+				fmt.Printf("Warning: error normalizing findings for %s: %v. Treating as zero findings.\n", persona.ID, err)
 			} else {
-				parsedData, _ := json.MarshalIndent(analyses, "", "  ")
-				saveToFile(filepath.Join(runDir, persona.ID, "parsed.json"), string(parsedData))
-				for _, a := range analyses {
-					preRunAnalyses[a.File] = append(preRunAnalyses[a.File], fmt.Sprintf("%s: %s", persona.ID, a.Analysis))
-				}
+				findingsMu.Lock()
+				allFindings = append(allFindings, findings...)
+				findingsMu.Unlock()
+				findingsData, _ := json.MarshalIndent(findings, "", "  ")
+				saveToFile(filepath.Join(runDir, persona.ID, "findings.json"), string(findingsData))
 			}
+
+			// Log Normalization usage
+			normEntry := RunLogEntry{
+				PersonaID:   "normalization:" + persona.ID,
+				Model:       normResult.Model,
+				TokensIn:    normResult.TokensIn,
+				TokensOut:   normResult.TokensOut,
+				TimeMS:      normElapsed.Milliseconds(),
+				InputPrice:  fastestCfg.InputPricePerMillion,
+				OutputPrice: fastestCfg.OutputPricePerMillion,
+			}
+			statsMu.Lock()
+			stats = append(stats, normEntry)
+			statsMu.Unlock()
+			logRun(initialCwd, repo, normEntry)
 
 			entry := RunLogEntry{
 				PersonaID:   persona.ID,
@@ -283,72 +410,17 @@ func main() {
 				TokensOut:   result.TokensOut,
 				TimeMS:      elapsed.Milliseconds(),
 				RawOutput:   result.Text,
+				Findings:    findings,
 				InputPrice:  config.ModelMapping[persona.ModelCategory].InputPricePerMillion,
 				OutputPrice: config.ModelMapping[persona.ModelCategory].OutputPricePerMillion,
 			}
+			statsMu.Lock()
 			stats = append(stats, entry)
+			statsMu.Unlock()
 			logRun(initialCwd, repo, entry)
-		}
+		}(persona)
 	}
-
-	// Stage 2: Reviewers
-	fmt.Printf("--- Executing %d reviewers...\n", len(reviewers))
-	for _, persona := range reviewers {
-		fmt.Printf("    -> Reviewer: %s\n", persona.ID)
-		prompt, result, elapsed, _, err := runPersona(ctx, persona, prInfo, globalContext, config, maxTokensFlag, preRunAnalyses, "")
-		if err != nil {
-			if err.Error() == "no matching files" {
-				fmt.Printf("    -> No matching files for persona %s, skipping\n", persona.ID)
-			} else {
-				fmt.Printf("Error executing reviewer %s (type: %T): %v, skipping\n", persona.ID, err, err)
-			}
-			continue
-		}
-		fmt.Printf("    <- Finished %s in %s\n", persona.ID, elapsed.Round(time.Millisecond))
-
-		saveToFile(filepath.Join(runDir, persona.ID, "prompt.md"), prompt)
-		saveToFile(filepath.Join(runDir, persona.ID, "raw.md"), result.Text)
-
-		// Normalization Step
-		fmt.Printf("    -> Normalizing findings for %s...\n", persona.ID)
-		normStart := time.Now()
-		findings, normResult, err := NormalizePersonaOutput(ctx, fastestClient, persona.ID, result.Text)
-		normElapsed := time.Since(normStart)
-		if err != nil {
-			fmt.Printf("Warning: error normalizing findings for %s: %v. Treating as zero findings.\n", persona.ID, err)
-		} else {
-			allFindings = append(allFindings, findings...)
-			findingsData, _ := json.MarshalIndent(findings, "", "  ")
-			saveToFile(filepath.Join(runDir, persona.ID, "findings.json"), string(findingsData))
-		}
-
-		// Log Normalization usage
-		normEntry := RunLogEntry{
-			PersonaID:   "normalization:" + persona.ID,
-			Model:       normResult.Model,
-			TokensIn:    normResult.TokensIn,
-			TokensOut:   normResult.TokensOut,
-			TimeMS:      normElapsed.Milliseconds(),
-			InputPrice:  fastestCfg.InputPricePerMillion,
-			OutputPrice: fastestCfg.OutputPricePerMillion,
-		}
-		stats = append(stats, normEntry)
-		logRun(initialCwd, repo, normEntry)
-
-		entry := RunLogEntry{
-			PersonaID:   persona.ID,
-			Model:       result.Model,
-			TokensIn:    result.TokensIn,
-			TokensOut:   result.TokensOut,
-			TimeMS:      elapsed.Milliseconds(),
-			RawOutput:   result.Text,
-			Findings:    findings,
-			InputPrice:  config.ModelMapping[persona.ModelCategory].InputPricePerMillion,
-			OutputPrice: config.ModelMapping[persona.ModelCategory].OutputPricePerMillion,
-		}
-		stats = append(stats, entry)
-		logRun(initialCwd, repo, entry)
-	}
+	wg.Wait()
 
 	// 7. Aggregation Step
 	fmt.Println("--- Aggregating all findings...")
@@ -374,56 +446,77 @@ func main() {
 		InputPrice:  balancedCfg.InputPricePerMillion,
 		OutputPrice: balancedCfg.OutputPricePerMillion,
 	}
+	statsMu.Lock()
 	stats = append(stats, aggEntry)
+	statsMu.Unlock()
 	logRun(initialCwd, repo, aggEntry)
 
 	// Stage 3: Post-run Explainers
 	if len(postRunExplainers) > 0 {
 		fmt.Printf("--- Executing %d post-run explainers...\n", len(postRunExplainers))
+		var wg sync.WaitGroup
 		for _, persona := range postRunExplainers {
-			fmt.Printf("    -> Explainer (Post): %s\n", persona.ID)
-			prompt, result, elapsed, _, err := runPersona(ctx, persona, prInfo, globalContext, config, maxTokensFlag, preRunAnalyses, summary)
-			if err != nil {
-				fmt.Printf("Error executing post-run explainer %s: %v, skipping\n", persona.ID, err)
-				continue
-			}
-			fmt.Printf("    <- Finished %s in %s\n", persona.ID, elapsed.Round(time.Millisecond))
+			wg.Add(1)
+			go func(persona Persona) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
 
-			saveToFile(filepath.Join(runDir, persona.ID, "prompt.md"), prompt)
-			saveToFile(filepath.Join(runDir, persona.ID, "raw.md"), result.Text)
+				fmt.Printf("    -> Explainer (Post): %s\n", persona.ID)
+				prompt, result, elapsed, _, err := runPersona(ctx, persona, prInfo, globalContext, config, maxTokensFlag, preRunAnalyses, summary)
+				if err != nil {
+					fmt.Printf("Error executing post-run explainer %s: %v, skipping\n", persona.ID, err)
+					return
+				}
+				fmt.Printf("    <- Finished %s in %s\n", persona.ID, elapsed.Round(time.Millisecond))
 
-			postRunOutputs = append(postRunOutputs, fmt.Sprintf("### %s\n\n%s", persona.ID, result.Text))
+				saveToFile(filepath.Join(runDir, persona.ID, "prompt.md"), prompt)
+				saveToFile(filepath.Join(runDir, persona.ID, "raw.md"), result.Text)
 
-			entry := RunLogEntry{
-				PersonaID:   persona.ID,
-				Model:       result.Model,
-				TokensIn:    result.TokensIn,
-				TokensOut:   result.TokensOut,
-				TimeMS:      elapsed.Milliseconds(),
-				RawOutput:   result.Text,
-				InputPrice:  config.ModelMapping[persona.ModelCategory].InputPricePerMillion,
-				OutputPrice: config.ModelMapping[persona.ModelCategory].OutputPricePerMillion,
-			}
-			stats = append(stats, entry)
-			logRun(initialCwd, repo, entry)
+				postRunOutputsMu.Lock()
+				postRunOutputs = append(postRunOutputs, fmt.Sprintf("### %s\n\n%s", persona.ID, result.Text))
+				postRunOutputsMu.Unlock()
+
+				entry := RunLogEntry{
+					PersonaID:   persona.ID,
+					Model:       result.Model,
+					TokensIn:    result.TokensIn,
+					TokensOut:   result.TokensOut,
+					TimeMS:      elapsed.Milliseconds(),
+					RawOutput:   result.Text,
+					InputPrice:  config.ModelMapping[persona.ModelCategory].InputPricePerMillion,
+					OutputPrice: config.ModelMapping[persona.ModelCategory].OutputPricePerMillion,
+				}
+				statsMu.Lock()
+				stats = append(stats, entry)
+				statsMu.Unlock()
+				logRun(initialCwd, repo, entry)
+			}(persona)
 		}
+		wg.Wait()
 	}
 
 	// 8. Report
 	fmt.Println("--- Generating report...")
 	totalElapsed := time.Since(startTimeTotal)
-	report := generateReport(prNumber, commitHash, prInfo.BaseRefOid, prInfo.HeadRefOid, summary, postRunOutputs, stats, totalElapsed)
+	report := generateReport(prNumber, commitHash, prInfo.BaseRefOid, prInfo.HeadRefOid, summary, postRunOutputs, stats, totalElapsed, filePatterns)
 	fmt.Print(report)
 	saveToFile(filepath.Join(runDir, "report.md"), report)
 }
 
-func initArgs() (*int, string, string, string, string) {
+func initArgs() (*int, *int, string, string, string, string, []string) {
 	prCmd := flag.NewFlagSet("pr", flag.ExitOnError)
 	prMaxTokens := prCmd.Int("max-tokens", 0, "Override max tokens for AI response")
+	prConcurrency := prCmd.Int("concurrency", 3, "Max concurrent personas")
 
 	commitCmd := flag.NewFlagSet("commit", flag.ExitOnError)
 	commitMaxTokens := commitCmd.Int("max-tokens", 0, "Override max tokens for AI response")
+	commitConcurrency := commitCmd.Int("concurrency", 3, "Max concurrent personas")
 	compareTo := commitCmd.String("compare-to", "", "Specific commit to compare to (default: parent)")
+
+	fileCmd := flag.NewFlagSet("file", flag.ExitOnError)
+	fileMaxTokens := fileCmd.Int("max-tokens", 0, "Override max tokens for AI response")
+	fileConcurrency := fileCmd.Int("concurrency", 3, "Max concurrent personas")
 
 	if len(os.Args) < 2 {
 		printUsage()
@@ -438,7 +531,7 @@ func initArgs() (*int, string, string, string, string) {
 			printUsage()
 			os.Exit(1)
 		}
-		return prMaxTokens, args[0], args[1], "", ""
+		return prMaxTokens, prConcurrency, args[0], args[1], "", "", nil
 	case "commit":
 		commitCmd.Parse(os.Args[2:])
 		args := commitCmd.Args()
@@ -446,19 +539,31 @@ func initArgs() (*int, string, string, string, string) {
 			printUsage()
 			os.Exit(1)
 		}
-		return commitMaxTokens, args[0], "", args[1], *compareTo
+		return commitMaxTokens, commitConcurrency, args[0], "", args[1], *compareTo, nil
+	case "file":
+		fileCmd.Parse(os.Args[2:])
+		args := fileCmd.Args()
+		if len(args) < 3 {
+			printUsage()
+			os.Exit(1)
+		}
+		repo := args[0]
+		branch := args[1]
+		files := args[2:]
+		return fileMaxTokens, fileConcurrency, repo, "", branch, "", files
 	default:
 		fmt.Println("Unknown command:", os.Args[1])
 		printUsage()
 		os.Exit(1)
 	}
-	return nil, "", "", "", ""
+	return nil, nil, "", "", "", "", nil
 }
 
 func printUsage() {
 	fmt.Println("Usage:")
-	fmt.Println("  ai-review pr <repo_owner>/<repo_name> <pr_number> [--max-tokens <int>]")
-	fmt.Println("  ai-review commit <repo_owner>/<repo_name> <commit_hash> [--compare-to <hash>] [--max-tokens <int>]")
+	fmt.Println("  ai-reviewer pr <repo> <pr-number> [--max-tokens <n>] [--concurrency <n>]")
+	fmt.Println("  ai-reviewer commit <repo> <commit-hash> [--compare-to <hash>] [--max-tokens <n>] [--concurrency <n>]")
+	fmt.Println("  ai-reviewer file <repo> <branch> <file1> <file2> ... [--max-tokens <n>] [--concurrency <n>]")
 }
 
 func printCurrentDir() {
@@ -507,10 +612,13 @@ func saveToFile(path, content string) {
 	}
 }
 
-func generateReport(prNumber, commitHash, baseSHA, headSHA, summary string, postRunOutputs []string, stats []RunLogEntry, totalTime time.Duration) string {
+func generateReport(prNumber, commitHash, baseSHA, headSHA, summary string, postRunOutputs []string, stats []RunLogEntry, totalTime time.Duration, filePatterns []string) string {
 	var out strings.Builder
 	out.WriteString("# AI Review Report\n\n")
-	if prNumber != "" {
+	if filePatterns != nil {
+		out.WriteString(fmt.Sprintf("## Files on %s\n", headSHA))
+		out.WriteString(fmt.Sprintf("- **Patterns:** `%v`\n", filePatterns))
+	} else if prNumber != "" {
 		out.WriteString(fmt.Sprintf("## PR #%s\n", prNumber))
 	} else {
 		out.WriteString(fmt.Sprintf("## Commit %s\n", headSHA[:8]))

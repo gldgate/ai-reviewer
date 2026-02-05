@@ -56,6 +56,8 @@ path_filters:           # optional: only run if these files changed
   - "inference-chain/**/*.go"
 exclude_filters:        # optional: ignore these files
   - "**/*_test.go"
+regex_filters:          # optional: only include files where changed lines match any of these regexes
+  - "TODO"
 ---
 You are a security expert. Review the following PR for security vulnerabilities.
 ```
@@ -88,6 +90,9 @@ go build -o ai-review
 
 # Review a specific commit (compared to its parent by default)
 ./ai-review commit <repo_owner>/<repo_name> <commit_hash> [--compare-to <hash>] [--max-tokens <int>]
+
+# Review specific files on a branch
+./ai-review file <repo_owner>/<repo_name> <branch_name> <file_pattern...> [--max-tokens <int>]
 ```
 
 Examples:
@@ -100,6 +105,9 @@ Examples:
 
 # Review commit abc1234 compared to def5678
 ./ai-review commit google/go-github abc1234 --compare-to def5678
+
+# Review all .go files in config directory on master branch
+./ai-review file google/go-github master "config/*.go"
 ```
 
 ## How it works
@@ -116,7 +124,7 @@ The tool executes a multi-stage pipeline:
 ## Output and Artifacts
 
 Each run generates a timestamped directory in `.ai-review/<repo_owner>/<repo_name>/runs/<target_id>/<timestamp>/` containing:
-- `target_id` is the PR number (for PR reviews) or the short commit hash (for commit reviews).
+- `target_id` is the PR number (for PR reviews), the short commit hash (for commit reviews), or `file-<branch_name>` (for file reviews).
 - `summary.md`: The aggregated Markdown summary.
 - `report.md`: The full report including explanations and stats.
 - `all_findings.json`: All normalized findings from all personas.
