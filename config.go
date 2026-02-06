@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -21,7 +20,7 @@ type ModelConfig struct {
 	OutputPricePerMillion float64 `yaml:"output_price_per_million"`
 }
 
-func LoadConfig(searchPaths []string, repo string) (*Config, error) {
+func LoadConfig(searchPaths []string, repo string, oh *OutputHandler) (*Config, error) {
 	finalConfig := &Config{
 		ModelMapping: make(map[string]ModelConfig),
 	}
@@ -43,10 +42,10 @@ func LoadConfig(searchPaths []string, repo string) (*Config, error) {
 			}
 		}
 
-		fmt.Printf("    -> Loading config from: %s\n", configPath)
+		oh.Printf("    -> Loading config from: %s\n", configPath)
 		var cfg Config
 		if err := yaml.Unmarshal(data, &cfg); err != nil {
-			fmt.Printf("Warning: error parsing config at %s: %v\n", configPath, err)
+			oh.Printf("Warning: error parsing config at %s: %v\n", configPath, err)
 			continue
 		}
 
