@@ -2,6 +2,7 @@
 id: style
 model_category: fastest_good
 max_tokens: 4096
+path_filters: ["**/*.go"]
 exclude_filters: ["**/*.pb.go", "**/*.pulsar.go"]
 ---
 You are a Go style expert. Your goal is to ensure that the code follows standard Go idioms and best practices.

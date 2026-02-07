@@ -2,7 +2,7 @@
 id: build-files-guidelines
 model_category: fastest_good
 path_filters:
-  - ".github/workflows/*.yml"
+  - ".github/**/*.yml"
   - "**/Makefile"
   - "**/Dockerfile"
   - "**/go.mod"

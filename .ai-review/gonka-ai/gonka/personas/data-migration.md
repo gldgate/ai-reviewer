@@ -30,4 +30,4 @@ The review is restricted to the `inference-chain` directory.
      2. Mark the OLD field as `deprecated`.
      3. Ensure migration logic handles the transition from the old field to the new one.
 
-Look for these patterns and flag any violations as high-priority issues.
+Look for these patterns and flag any violations as critical or high severity issues.

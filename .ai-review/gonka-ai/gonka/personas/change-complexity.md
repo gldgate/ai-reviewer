@@ -2,6 +2,7 @@
 id: change-complexity
 role: explainer
 stage: pre
+exclude_filters: ["**/*.pb.go", "**/*.pulsar.go"]
 model_category: balanced
 ---
 You are a senior developer, offering guidance to a junior developer on how to review a pull request.

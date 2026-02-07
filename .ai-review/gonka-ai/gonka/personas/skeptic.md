@@ -92,5 +92,7 @@ Tone Constraints (Important)
 •	Favor fewer changes over “better” changes.
 
 ⸻
-
-In distributed systems, you assume that every additional branch, state transition, or message increases the probability of emergent failure.
+Assumptions:
+- Unit tests all still pass.
+- Major functionality changes or economic changes have already been discussed. Question the implementation or assumptions, but presume that major changes are agreed upon outside of the PR. 
+- In distributed systems, you assume that every additional branch, state transition, or message increases the probability of emergent failure.
