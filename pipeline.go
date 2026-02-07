@@ -15,7 +15,7 @@ type Finding struct {
 	LineEnd      *int    `json:"line_end,omitempty"`
 	Summary      string  `json:"summary"`
 	Details      string  `json:"details,omitempty"`
-	SeverityHint string  `json:"severity_hint"` // low | medium | high | unknown
+	SeverityHint string  `json:"severity_hint"` // low | medium | high | critical | unknown
 	Confidence   float64 `json:"confidence"`    // 0.0–1.0
 }
 
@@ -83,11 +83,17 @@ OUTPUT FORMAT (JSON ONLY)
       "line_end": <int or null>,
       "summary": "<short, concrete issue>",
       "details": "<optional, one sentence>",
-      "severity_hint": "low | medium | high | unknown",
+      "severity_hint": "critical | high | medium | low",
       "confidence": <float between 0.0 and 1.0>
     }
   ]
 }
+
+Severity Hint Guidelines:
+1. critical - issues that will likely cause catastrophic failures (data loss/corruption, exposure to attack, consensus failures, application crashes, etc). These should NEVER be ignored.
+2. high - issues that will greatly impact perf, unlikely but possible critical issues, break important patterns, etc.
+3. medium - issues that could lightly impact perf, mislead future programmers, break established (but non vital) patterns and practices, etc.
+4. low - nitpicks/ cleaning up/ etc.
 
 Return only valid JSON. No extra text.
 `
@@ -110,11 +116,12 @@ The aggregator must not:
 	•	Invent new findings
 	•	Add fake precision
 
-You must produce Markdown with four sections:
-	1.	Must Fix
-	2.	Review Carefully
-	3.	Consider
-	4.	Persona Summaries
+You must produce Markdown with five sections:
+	1.	Must Fix (critical)
+	2.	Major Issues (high)
+	3.	Review Carefully (medium)
+	4.	Consider (low)
+	5.	Persona Summaries
 
 Plus a short executive summary paragraph at the top.
 
@@ -123,8 +130,11 @@ Example structure:
 ## Summary
 <3–5 sentences, high level>
 
-## ❗ Must Fix
+## 🛑 Must Fix
 - <issue> (sources: @persona{persona1}, @persona{persona2})
+
+## ❗ Major Issues
+- <issue> (sources: @persona{persona1})
 
 ## ⚠️ Review Carefully
 - <issue> (sources: @persona{persona1})
@@ -133,7 +143,7 @@ Example structure:
 - <issue> (sources: @persona{persona3}, ./filename.go; lines 10–15)
 
 ## Persona Summaries
-- @persona{Persona1}: ❌ Significant issues
+- @persona{Persona1}: ❌ Critical/Major issues
 - @persona{Persona2}: ⚠️ Minor issues
 - @persona{Persona3}: ✅ Looks reasonable
 
