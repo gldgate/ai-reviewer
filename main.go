@@ -58,7 +58,7 @@ func main() {
 		runConfig.OutputHandler.Printf("Error aggregating findings: %v\n", err)
 		runResults.Summary = "Error generating aggregated summary."
 	}
-	runConfig.OutputHandler.SaveRunFile("summary.md", runResults.Summary)
+	runConfig.OutputHandler.SaveRunFile("summary.md", runConfig.OutputHandler.StripMarkers(runResults.Summary))
 
 	// Log Aggregation usage
 	balancedCfg := runConfig.Config.ModelMapping[string(BestCode)]

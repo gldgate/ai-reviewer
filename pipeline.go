@@ -108,7 +108,8 @@ The aggregator:
 	•	Assigns final severity
 	•	Produces short, actionable lists
 	•	Produces one-line summaries per persona
-	•	Includes a file/line number reference when applicable
+	•	Includes a file/line number reference for every finding
+	•	You MUST include specific line numbers (e.g., ./filename.go:10-15) for all findings to ensure they are actionable.
 
 
 The aggregator must not:
@@ -131,16 +132,16 @@ Example structure:
 <3–5 sentences, high level>
 
 ## 🛑 Must Fix
-- <issue> (sources: @persona{persona1}, @persona{persona2})
+- <issue> (sources: @persona{persona1}, @persona{persona2}, ./filename.go:10-15)
 
 ## ❗ Major Issues
-- <issue> (sources: @persona{persona1})
+- <issue> (sources: @persona{persona1}, ./filename.go:20)
 
 ## ⚠️ Review Carefully
-- <issue> (sources: @persona{persona1})
+- <issue> (sources: @persona{persona1}, ./filename.go:30-35)
 
 ## 💭 Consider
-- <issue> (sources: @persona{persona3}, ./filename.go; lines 10–15)
+- <issue> (sources: @persona{persona3}, ./filename.go:40)
 
 ## Persona Summaries
 - @persona{Persona1}: ❌ Critical/Major issues
@@ -155,6 +156,7 @@ Instructions for aggregation:
 	•	Downgrade severity for low-confidence findings
 	•	Explicitly call out disagreements
 	•	Use @persona{ID} whenever you refer to a persona's ID.
+	•	ALWAYS include file and line number information in the findings list.
 `
 
 func extractJSON(text string) string {
