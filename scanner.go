@@ -44,27 +44,27 @@ func (s *Scanner) Load(expectedType string, targetFactory func() interface{}) ([
 		dedicatedPaths = append(dedicatedPaths, filepath.Join(base, ".ai-review", pluralType))
 	}
 
-	// 1. Dedicated directories (local)
-	dedicated, _ := s.scanFiles(dedicatedPaths, true, expectedType, targetFactory)
-	for _, res := range dedicated {
-		resultsMap[res.ID] = res
+	// 1. Repo branch (Source of Truth)
+	if s.HeadSHA != "" {
+		repoResults, _ := s.scanRepo(s.HeadSHA, expectedType, targetFactory)
+		for _, res := range repoResults {
+			resultsMap[res.ID] = res
+		}
 	}
 
-	// 2. All search paths (local, for files with explicit ai_review)
-	other, _ := s.scanFiles(s.SearchPaths, false, expectedType, targetFactory)
-	for _, res := range other {
+	// 2. Dedicated directories (local)
+	dedicated, _ := s.scanFiles(dedicatedPaths, true, expectedType, targetFactory)
+	for _, res := range dedicated {
 		if _, ok := resultsMap[res.ID]; !ok {
 			resultsMap[res.ID] = res
 		}
 	}
 
-	// 3. Repo branch
-	if s.HeadSHA != "" {
-		repoResults, _ := s.scanRepo(s.HeadSHA, expectedType, targetFactory)
-		for _, res := range repoResults {
-			if _, ok := resultsMap[res.ID]; !ok {
-				resultsMap[res.ID] = res
-			}
+	// 3. All search paths (local, for files with explicit ai_review)
+	other, _ := s.scanFiles(s.SearchPaths, false, expectedType, targetFactory)
+	for _, res := range other {
+		if _, ok := resultsMap[res.ID]; !ok {
+			resultsMap[res.ID] = res
 		}
 	}
 
@@ -180,6 +180,8 @@ func getAIReviewAndID(target interface{}, path string) (string, string) {
 		return v.AIReview, v.ID
 	case *Primer:
 		return v.AIReview, v.ID
+	case *Waiver:
+		return v.AIReview, v.ID
 	}
 	return "", ""
 }
@@ -189,6 +191,8 @@ func setID(target interface{}, id string) {
 	case *Persona:
 		v.ID = id
 	case *Primer:
+		v.ID = id
+	case *Waiver:
 		v.ID = id
 	}
 }

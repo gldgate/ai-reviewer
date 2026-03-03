@@ -5,13 +5,17 @@ import (
 )
 
 type Primer struct {
-	ID             string   `yaml:"id"`
-	AIReview       string   `yaml:"ai_review"`
-	Type           string   `yaml:"type"`
-	PathFilters    []string `yaml:"path_filters"`
-	ExcludeFilters []string `yaml:"exclude_filters"`
-	RegexFilters   []string `yaml:"regex_filters"`
-	Content        string
+	ID                string      `yaml:"id"`
+	AIReview          string      `yaml:"ai_review"`
+	Type              string      `yaml:"type"`
+	PathFilters       []string    `yaml:"path_filters"`
+	ExcludeFilters    []string    `yaml:"exclude_filters"`
+	RegexFilters      []string    `yaml:"regex_filters"`
+	BranchFilters     []string    `yaml:"branch_filters"`
+	FunctionFilters   []string    `yaml:"function_filters"`
+	LineNumberFilters []LineRange `yaml:"line_numbers_filter"`
+	DateFilter        string      `yaml:"date_filter"`
+	Content           string
 }
 
 type PrimerMatch struct {
@@ -61,7 +65,7 @@ func (rc *RunConfig) FindMatches(personaContext *PRContext) []PrimerMatch {
 	for _, cp := range compiledPrimers {
 		var matchedFiles []string
 		for _, fileCtx := range personaContext.Files {
-			if fileCtx.Matches(cp.primer.PathFilters, cp.primer.ExcludeFilters, cp.regexes) {
+			if fileCtx.Matches(cp.primer.PathFilters, cp.primer.ExcludeFilters, cp.regexes, personaContext.Branch, cp.primer.BranchFilters, cp.primer.FunctionFilters, cp.primer.DateFilter, personaContext.CommitDate) {
 				matchedFiles = append(matchedFiles, fileCtx.Filename)
 			}
 		}

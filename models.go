@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
+	"sync"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -11,6 +13,36 @@ import (
 	"github.com/sashabaranov/go-openai"
 	googleoption "google.golang.org/api/option"
 )
+
+var (
+	envCache map[string]string
+	envOnce  sync.Once
+)
+
+func getEnv(key string) string {
+	envOnce.Do(func() {
+		envCache = make(map[string]string)
+		data, err := os.ReadFile("KEYS.env")
+		if err == nil {
+			lines := strings.Split(string(data), "\n")
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+				if line == "" || strings.HasPrefix(line, "#") {
+					continue
+				}
+				parts := strings.SplitN(line, "=", 2)
+				if len(parts) == 2 {
+					envCache[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+				}
+			}
+		}
+	})
+
+	if val, ok := envCache[key]; ok {
+		return val
+	}
+	return os.Getenv(key)
+}
 
 type ModelClient interface {
 	Generate(ctx context.Context, prompt string, maxTokens int) (ModelResult, error)
@@ -210,19 +242,19 @@ func (c *GeminiClient) generate(ctx context.Context, prompt string, maxTokens in
 func GetModelClient(ctx context.Context, provider, model string) (ModelClient, error) {
 	switch provider {
 	case "openai":
-		apiKey := os.Getenv("OPENAI_API_KEY")
+		apiKey := getEnv("OPENAI_API_KEY")
 		if apiKey == "" {
 			return nil, fmt.Errorf("OPENAI_API_KEY not set")
 		}
 		return NewOpenAIClient(apiKey, model), nil
 	case "anthropic":
-		apiKey := os.Getenv("ANTHROPIC_API_KEY")
+		apiKey := getEnv("ANTHROPIC_API_KEY")
 		if apiKey == "" {
 			return nil, fmt.Errorf("ANTHROPIC_API_KEY not set")
 		}
 		return NewAnthropicClient(apiKey, model), nil
 	case "gemini":
-		apiKey := os.Getenv("GEMINI_API_KEY")
+		apiKey := getEnv("GEMINI_API_KEY")
 		if apiKey == "" {
 			return nil, fmt.Errorf("GEMINI_API_KEY not set")
 		}

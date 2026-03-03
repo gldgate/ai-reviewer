@@ -3,6 +3,7 @@ package main
 import (
 	"regexp"
 	"testing"
+	"time"
 )
 
 func TestMatchesFilters(t *testing.T) {
@@ -200,7 +201,7 @@ func TestFileContext_Matches(t *testing.T) {
 				compiledRegexes = append(compiledRegexes, regexp.MustCompile(r))
 			}
 			fc := FileContext{Filename: tt.file, AddedLines: tt.addedLines}
-			got := fc.Matches(tt.includes, tt.excludes, compiledRegexes)
+			got := fc.Matches(tt.includes, tt.excludes, compiledRegexes, "", nil, nil, "", time.Time{})
 			if got != tt.want {
 				t.Errorf("FileContext(%q).Matches(%v, %v, %v) = %v, want %v", tt.file, tt.includes, tt.excludes, tt.regexes, got, tt.want)
 			}

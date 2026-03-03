@@ -82,7 +82,7 @@ OUTPUT FORMAT (JSON ONLY)
       "line_start": <int or null>,
       "line_end": <int or null>,
       "summary": "<short, concrete issue>",
-      "details": "<optional, one sentence>",
+      "details": "<full description of the issue, including why it is a problem and how to fix it>",
       "severity_hint": "critical | high | medium | low",
       "confidence": <float between 0.0 and 1.0>
     }
@@ -107,6 +107,7 @@ The aggregator:
 	•	Clusters related issues
 	•	Assigns final severity
 	•	Produces short, actionable lists
+	•	Uses the provided details to explain the problem and solution clearly.
 	•	Produces one-line summaries per persona
 	•	Includes a file/line number reference for every finding
 	•	You MUST include specific line numbers (e.g., ./filename.go:10-15) for all findings to ensure they are actionable.
@@ -124,6 +125,8 @@ You must produce Markdown with five sections:
 	4.	Consider (low)
 	5.	Persona Summaries
 
+Each finding in sections 1-4 should include the summary, the source personas, the file/line reference, and a clear explanation of the issue and suggested fix based on the provided details.
+
 Plus a short executive summary paragraph at the top.
 
 Example structure:
@@ -132,16 +135,20 @@ Example structure:
 <3–5 sentences, high level>
 
 ## 🛑 Must Fix
-- <issue> (sources: @persona{persona1}, @persona{persona2}, ./filename.go:10-15)
+- **<summary>** (sources: @persona{persona1}, @persona{persona2}, ./filename.go:10-15)
+  <Full description and fix instructions from details>
 
 ## ❗ Major Issues
-- <issue> (sources: @persona{persona1}, ./filename.go:20)
+- **<summary>** (sources: @persona{persona1}, ./filename.go:20)
+  <Full description and fix instructions from details>
 
 ## ⚠️ Review Carefully
-- <issue> (sources: @persona{persona1}, ./filename.go:30-35)
+- **<summary>** (sources: @persona{persona1}, ./filename.go:30-35)
+  <Full description and fix instructions from details>
 
 ## 💭 Consider
-- <issue> (sources: @persona{persona3}, ./filename.go:40)
+- **<summary>** (sources: @persona{persona3}, ./filename.go:40)
+  <Full description and fix instructions from details>
 
 ## Persona Summaries
 - @persona{Persona1}: ❌ Critical/Major issues

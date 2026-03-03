@@ -33,9 +33,15 @@ func main() {
 		return
 	}
 
-	// 7. Execute Personas
-	runResults := NewRunResults()
+	runOne(ctx, runConfig, s)
+}
 
+func runOne(ctx context.Context, runConfig *RunConfig, s *RunSettings) {
+	// 2.5 Initialize stats from diff
+	runResults := NewRunResults()
+	runResults.SetDiffStats(runConfig.GlobalContext)
+
+	// 7. Execute Personas
 	concurrency := s.Concurrency
 	sem := make(chan struct{}, concurrency)
 
@@ -44,6 +50,9 @@ func main() {
 
 	// Stage 2: Reviewers
 	runPersonas(ctx, runConfig.ReviewersToRun, runConfig, runResults, sem, "reviewers")
+
+	// Stage 2.5: Waivers
+	ApplyWaivers(ctx, runConfig, runResults)
 
 	// 7. Aggregation Step
 	runConfig.OutputHandler.Println("--- Aggregating all findings...")
@@ -83,6 +92,9 @@ func main() {
 	runResults.Report = generateReport(s.PRNumber, s.CommitHash, runConfig.PRInfo.BaseRefOid, runConfig.PRInfo.HeadRefOid, runResults, s.FilePatterns, runConfig.OutputHandler)
 	runConfig.OutputHandler.Printf("%s", runConfig.OutputHandler.Highlight(runResults.Report))
 	runConfig.OutputHandler.SaveRunFile("report.md", runConfig.OutputHandler.StripMarkers(runResults.Report))
+
+	// 9. Stats
+	runConfig.OutputHandler.SaveRunFile("stats.txt", runResults.GetStatsString())
 }
 
 func runPersonas(ctx context.Context, personas []PersonaRun, rc *RunConfig, rr *RunResults, sem chan struct{}, stageLabel string) {
@@ -176,6 +188,21 @@ func generateReport(prNumber, commitHash, baseSHA, headSHA string, rr *RunResult
 		out.WriteString(fmt.Sprintf("- %s: %d tokens (In: %d, Out: %d), Cost: $%.6f\n", model, ms.in+ms.out, ms.in, ms.out, ms.cost))
 	}
 	out.WriteString(fmt.Sprintf("\n### Estimated Total Cost: $%.6f\n", totalCost))
+
+	if len(rr.WaivedFindings) > 0 {
+		out.WriteString("\n## Waived Issues\n\n")
+		for _, f := range rr.WaivedFindings {
+			location := f.File
+			if f.LineStart != nil {
+				location = fmt.Sprintf("%s:%d", location, *f.LineStart)
+				if f.LineEnd != nil {
+					location = fmt.Sprintf("%s-%d", location, *f.LineEnd)
+				}
+			}
+			out.WriteString(fmt.Sprintf("- **%s** (%s)\n", f.Summary, location))
+			out.WriteString(fmt.Sprintf("  %s\n\n", f.Details))
+		}
+	}
 
 	return out.String()
 }

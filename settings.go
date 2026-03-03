@@ -30,12 +30,18 @@ type RunLogEntry struct {
 type RunResults struct {
 	Stats          []RunLogEntry
 	AllFindings    []Finding
+	WaivedFindings []Finding
 	PostRunOutputs []string
 	PreRunAnalyses map[string][]string
 	Summary        string
 	Report         string
 	StartTime      time.Time
 	TotalElapsed   time.Duration
+
+	// Added stats
+	LinesAdded   int
+	LinesRemoved int
+	LinesChanged int
 
 	statsMu          sync.Mutex
 	findingsMu       sync.Mutex
@@ -76,6 +82,65 @@ func (rr *RunResults) AddPreRunAnalysis(file string, analysis string) {
 
 func (rr *RunResults) Finish() {
 	rr.TotalElapsed = time.Since(rr.StartTime)
+}
+
+func (rr *RunResults) SetDiffStats(ctx *PRContext) {
+	for _, f := range ctx.Files {
+		lines := strings.Split(f.Diff, "\n")
+		for _, line := range lines {
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) < 2 {
+				continue
+			}
+			diffLine := parts[1]
+			if strings.HasPrefix(diffLine, "+") && !strings.HasPrefix(diffLine, "+++ ") {
+				rr.LinesAdded++
+			} else if strings.HasPrefix(diffLine, "-") && !strings.HasPrefix(diffLine, "--- ") {
+				rr.LinesRemoved++
+			}
+		}
+	}
+	rr.LinesChanged = rr.LinesAdded + rr.LinesRemoved
+}
+
+func (rr *RunResults) GetStatsString() string {
+	issueCounts := make(map[string]int)
+	for _, f := range rr.AllFindings {
+		level := strings.ToLower(f.SeverityHint)
+		if level == "" {
+			level = "unknown"
+		}
+		issueCounts[level]++
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("lines_added=%d\n", rr.LinesAdded))
+	sb.WriteString(fmt.Sprintf("lines_removed=%d\n", rr.LinesRemoved))
+	sb.WriteString(fmt.Sprintf("lines_changed=%d\n", rr.LinesChanged))
+
+	// All different issue levels
+	for level, count := range issueCounts {
+		sb.WriteString(fmt.Sprintf("issues_%s=%d\n", level, count))
+	}
+
+	// Token/cost summaries
+	totalTokensIn := 0
+	totalTokensOut := 0
+	totalCost := 0.0
+
+	for _, entry := range rr.Stats {
+		totalTokensIn += entry.TokensIn
+		totalTokensOut += entry.TokensOut
+		cost := (float64(entry.TokensIn) * entry.InputPrice / 1000000.0) +
+			(float64(entry.TokensOut) * entry.OutputPrice / 1000000.0)
+		totalCost += cost
+	}
+
+	sb.WriteString(fmt.Sprintf("tokens_in=%d\n", totalTokensIn))
+	sb.WriteString(fmt.Sprintf("tokens_out=%d\n", totalTokensOut))
+	sb.WriteString(fmt.Sprintf("total_cost=%.6f\n", totalCost))
+
+	return sb.String()
 }
 
 type OutputHandler struct {
@@ -154,6 +219,7 @@ type RunConfig struct {
 	Config        *Config
 	Personas      []Persona
 	Primers       []Primer
+	Waivers       []Waiver
 	PRInfo        *PRInfo
 	GlobalContext *PRContext
 	RunDir        string
@@ -204,7 +270,7 @@ func NewRunSettingsFromArgs(args []string) *RunSettings {
 	for i := 1; i < len(args); i++ {
 		arg := args[i]
 		if !strings.HasPrefix(arg, "-") {
-			if arg == "pr" || arg == "commit" || arg == "file" {
+			if arg == "pr" || arg == "commit" || arg == "file" || arg == "branches" {
 				command = arg
 				commandIdx = i
 				break
@@ -230,6 +296,8 @@ func NewRunSettingsFromArgs(args []string) *RunSettings {
 		s.parseCommitArgs(subArgs)
 	case "file":
 		s.parseFileArgs(subArgs)
+	case "branches":
+		s.parseBranchesArgs(subArgs)
 	default:
 		fmt.Printf("Unknown command: %s\n", s.Command)
 		s.PrintUsage()
@@ -288,6 +356,24 @@ func NewRunConfig(ctx context.Context, s *RunSettings) (*RunConfig, error) {
 		if err != nil {
 			return nil, fmt.Errorf("error getting commit info: %w", err)
 		}
+	} else if s.IsBranches() {
+		rc.OutputHandler.Printf("--- Ensuring repo %s is available...\n", s.Repo)
+		if err := EnsureRepo(s.Repo); err != nil {
+			return nil, fmt.Errorf("error ensuring repo: %w", err)
+		}
+
+		rc.OutputHandler.Printf("--- Fetching branches %s and %s...\n", s.CompareTo, s.CommitHash)
+		if err := FetchRefs(s.Repo, "", s.CompareTo); err != nil {
+			rc.OutputHandler.Printf("    Warning: error fetching %s: %v\n", s.CompareTo, err)
+		}
+		if err := FetchRefs(s.Repo, "", s.CommitHash); err != nil {
+			rc.OutputHandler.Printf("    Warning: error fetching %s: %v\n", s.CommitHash, err)
+		}
+
+		rc.PRInfo, err = GetBranchesInfo(s.Repo, s.CompareTo, s.CommitHash)
+		if err != nil {
+			return nil, fmt.Errorf("error getting branches info: %w", err)
+		}
 	} else {
 		rc.OutputHandler.Printf("--- Fetching PR info for %s #%s...\n", s.Repo, s.PRNumber)
 		rc.PRInfo, err = GetPRInfo(s.Repo, s.PRNumber)
@@ -343,6 +429,11 @@ func NewRunConfig(ctx context.Context, s *RunSettings) (*RunConfig, error) {
 		return nil, fmt.Errorf("error loading primers: %w", err)
 	}
 
+	rc.Waivers, err = LoadWaivers(rc.SearchPaths, s.Repo, rc.PRInfo.HeadRefOid, rc.OutputHandler)
+	if err != nil {
+		rc.OutputHandler.Printf("    Warning: error loading waivers: %v\n", err)
+	}
+
 	// 4. Extract context
 	rc.OutputHandler.Println("--- Extracting PR context...")
 	rc.GlobalContext, err = GetPRContext(rc.PRInfo, s.FilePatterns, nil, nil)
@@ -351,10 +442,12 @@ func NewRunConfig(ctx context.Context, s *RunSettings) (*RunConfig, error) {
 	}
 
 	// 5. Create run directory
-	if err := os.MkdirAll(rc.RunDir, 0755); err != nil {
-		return nil, fmt.Errorf("error creating run directory: %w", err)
+	if !s.DryRun {
+		if err := os.MkdirAll(rc.RunDir, 0755); err != nil {
+			return nil, fmt.Errorf("error creating run directory: %w", err)
+		}
+		rc.OutputHandler.Printf("--- Run directory: %s\n", rc.RunDir)
 	}
-	rc.OutputHandler.Printf("--- Run directory: %s\n", rc.RunDir)
 
 	// 6. Filter personas
 	rc.filterPersonas()
@@ -394,7 +487,8 @@ func (rc *RunConfig) filterPersonas() {
 		}
 
 		var personaContext *PRContext
-		if len(includes) > 0 || len(p.ExcludeFilters) > 0 || len(p.RegexFilters) > 0 || (rc.PRInfo.BaseRefOid == rc.PRInfo.HeadRefOid && !rc.PRInfo.IsCommit && rc.PRInfo.BaseRefOid != "") {
+		if len(includes) > 0 || len(p.ExcludeFilters) > 0 || len(p.RegexFilters) > 0 || (rc.PRInfo.BaseRefOid == rc.PRInfo.HeadRefOid && !rc.PRInfo.IsCommit && rc.PRInfo.BaseRefOid != "") ||
+			len(p.BranchFilters) > 0 || len(p.FunctionFilters) > 0 || p.DateFilter != "" {
 			var err error
 			personaContext, err = GetPRContext(rc.PRInfo, includes, p.ExcludeFilters, p.RegexFilters)
 			if err != nil {
@@ -406,7 +500,20 @@ func (rc *RunConfig) filterPersonas() {
 		}
 
 		run := PersonaRun{Persona: p, Context: personaContext}
-		skip := len(personaContext.Files) == 0
+		skip := true
+		for _, f := range personaContext.Files {
+			var regexes []*regexp.Regexp
+			for _, r := range p.RegexFilters {
+				re, err := regexp.Compile(r)
+				if err == nil {
+					regexes = append(regexes, re)
+				}
+			}
+			if f.Matches(p.PathFilters, p.ExcludeFilters, regexes, personaContext.Branch, p.BranchFilters, p.FunctionFilters, p.DateFilter, personaContext.CommitDate) {
+				skip = false
+				break
+			}
+		}
 
 		if p.Role == "explainer" {
 			if p.Stage == "pre" {
@@ -529,11 +636,33 @@ func (s *RunSettings) parseFileArgs(args []string) {
 	s.FilePatterns = remaining[2:]
 }
 
+func (s *RunSettings) parseBranchesArgs(args []string) {
+	fs := flag.NewFlagSet("branches", flag.ExitOnError)
+	maxTokens := fs.Int("max-tokens", s.MaxTokens, "Override max tokens for AI response")
+	concurrency := fs.Int("concurrency", s.Concurrency, "Max concurrent personas")
+	dryRun := fs.Bool("dry-run", false, "Scan and report what will be run, but don't execute")
+
+	remaining, _ := parseInterspersed(fs, args)
+
+	s.MaxTokens = *maxTokens
+	s.Concurrency = *concurrency
+	s.DryRun = *dryRun
+
+	if len(remaining) < 3 {
+		s.PrintUsage()
+		os.Exit(1)
+	}
+	s.Repo = remaining[0]
+	s.CompareTo = remaining[1]  // base
+	s.CommitHash = remaining[2] // head
+}
+
 func (s *RunSettings) PrintUsage() {
 	fmt.Println("Usage:")
 	fmt.Println("  ai-reviewer pr <repo> <pr-number> [--max-tokens <n>] [--concurrency <n>] [--dry-run]")
 	fmt.Println("  ai-reviewer commit <repo> <commit-hash> [--compare-to <hash>] [--max-tokens <n>] [--concurrency <n>] [--dry-run]")
 	fmt.Println("  ai-reviewer file <repo> <branch> <file1> <file2> ... [--max-tokens <n>] [--concurrency <n>] [--dry-run]")
+	fmt.Println("  ai-reviewer branches <repo> <base> <head> [--max-tokens <n>] [--concurrency <n>] [--dry-run]")
 }
 
 func (s *RunSettings) TargetID() string {
@@ -543,10 +672,20 @@ func (s *RunSettings) TargetID() string {
 	case "commit":
 		return s.CommitHash
 	case "file":
-		return "file-" + s.CommitHash // branch name
+		return "file-" + sanitizePath(s.CommitHash) // branch name
+	case "branches":
+		return "branches-" + sanitizePath(s.CompareTo) + "-" + sanitizePath(s.CommitHash) // base and head branches
 	default:
 		return ""
 	}
+}
+
+func sanitizePath(s string) string {
+	// Replace unsafe characters with '-'
+	// Unsafe for filenames: / \ : * ? " < > |
+	// Also replace other potential issues just in case
+	re := regexp.MustCompile(`[\\/:*?"<>|]`)
+	return re.ReplaceAllString(s, "-")
 }
 
 func (s *RunSettings) IsPR() bool {
@@ -559,6 +698,10 @@ func (s *RunSettings) IsCommit() bool {
 
 func (s *RunSettings) IsFile() bool {
 	return s.Command == "file"
+}
+
+func (s *RunSettings) IsBranches() bool {
+	return s.Command == "branches"
 }
 
 func (s *RunSettings) RunDir() string {

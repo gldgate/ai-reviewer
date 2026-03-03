@@ -8,37 +8,74 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
 )
 
 type PRInfo struct {
-	Title        string   `json:"title"`
-	Body         string   `json:"body"`
-	BaseRefName  string   `json:"baseRefName"`
-	BaseRefOid   string   `json:"baseRefOid"`
-	HeadRefName  string   `json:"headRefName"`
-	HeadRefOid   string   `json:"headRefOid"`
-	IsCommit     bool     `json:"isCommit"`
-	FilePatterns []string `json:"filePatterns"`
+	Title        string    `json:"title"`
+	Body         string    `json:"body"`
+	BaseRefName  string    `json:"baseRefName"`
+	BaseRefOid   string    `json:"baseRefOid"`
+	HeadRefName  string    `json:"headRefName"`
+	HeadRefOid   string    `json:"headRefOid"`
+	IsCommit     bool      `json:"isCommit"`
+	CommitDate   time.Time `json:"commitDate"`
+	FilePatterns []string  `json:"filePatterns"`
 }
 
 type PRContext struct {
 	Title       string
 	Description string
 	Files       []FileContext
+	Branch      string
+	CommitDate  time.Time
 }
 
 type FileContext struct {
 	Filename   string
 	Diff       string   // Annotated diff for this file
 	AddedLines []string // Only the content of the added lines
+	Functions  []string
 }
 
-func (f FileContext) Matches(includes, excludes []string, regexes []*regexp.Regexp) bool {
+func (f FileContext) Matches(includes, excludes []string, regexes []*regexp.Regexp, branch string, branchFilters []string, functionFilters []string, dateFilter string, commitDate time.Time) bool {
 	if !MatchesFilters(f.Filename, includes, excludes) {
 		return false
 	}
+
+	if len(branchFilters) > 0 {
+		if !pathIncluded(branch, branchFilters) {
+			return false
+		}
+	}
+
+	if len(functionFilters) > 0 {
+		matched := false
+	loop:
+		for _, ff := range functionFilters {
+			for _, fn := range f.Functions {
+				if fn == ff {
+					matched = true
+					break loop
+				}
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+
+	if dateFilter != "" && !commitDate.IsZero() {
+		cutoff, err := time.Parse("2006-01-02", dateFilter)
+		if err == nil {
+			if !commitDate.Before(cutoff) {
+				return false
+			}
+		}
+	}
+
 	if len(regexes) == 0 {
 		return true
 	}
@@ -104,25 +141,49 @@ func GetPRInfo(repo, prNumber string) (*PRInfo, error) {
 		return nil, fmt.Errorf("error unmarshaling gh output: %w", err)
 	}
 
+	// Fetch commit date for the head of the PR
+	cmd = exec.Command("git", "show", "-s", "--format=%cI", pr.HeadRefOid)
+	dateOutput, err := cmd.Output()
+	if err == nil {
+		dateStr := strings.TrimSpace(string(dateOutput))
+		if t, err := time.Parse(time.RFC3339, dateStr); err == nil {
+			pr.CommitDate = t
+		}
+	}
+
 	return &pr, nil
 }
 
 func GetCommitInfo(commitHash, compareTo string) (*PRInfo, error) {
 	fmt.Printf("    -> Getting info for commit %s...\n", commitHash)
 
-	// Get commit message (title and body)
-	cmd := exec.Command("git", "show", "-s", "--format=%s%n%n%b", commitHash)
+	// Get commit message and date
+	cmd := exec.Command("git", "show", "-s", "--format=%s%n%n%b%n--DATE--%n%cI", commitHash)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("error getting commit message: %w, output: %s", err, string(output))
+		return nil, fmt.Errorf("error getting commit info: %w, output: %s", err, string(output))
 	}
 
-	fullMsg := strings.TrimSpace(string(output))
-	parts := strings.SplitN(fullMsg, "\n", 2)
-	title := parts[0]
-	body := ""
+	fullContent := string(output)
+	parts := strings.Split(fullContent, "\n--DATE--\n")
+	msgPart := strings.TrimSpace(parts[0])
+	dateStr := ""
 	if len(parts) > 1 {
-		body = strings.TrimSpace(parts[1])
+		dateStr = strings.TrimSpace(parts[1])
+	}
+
+	msgLines := strings.SplitN(msgPart, "\n", 2)
+	title := msgLines[0]
+	body := ""
+	if len(msgLines) > 1 {
+		body = strings.TrimSpace(msgLines[1])
+	}
+
+	var commitDate time.Time
+	if dateStr != "" {
+		if t, err := time.Parse(time.RFC3339, dateStr); err == nil {
+			commitDate = t
+		}
 	}
 
 	// Get full SHA for head
@@ -157,6 +218,7 @@ func GetCommitInfo(commitHash, compareTo string) (*PRInfo, error) {
 		BaseRefOid:  baseSHA,
 		HeadRefOid:  strings.TrimSpace(string(headSHA)),
 		IsCommit:    true,
+		CommitDate:  commitDate,
 		BaseRefName: baseSHA[:8], // Short SHA for display
 		HeadRefName: strings.TrimSpace(string(headSHA))[:8],
 	}, nil
@@ -172,6 +234,17 @@ func GetFileInfo(repo, branch string, filePatterns []string) (*PRInfo, error) {
 		return nil, fmt.Errorf("error resolving branch %s: %w", branch, err)
 	}
 	headSHA := strings.TrimSpace(string(headSHAOut))
+
+	// Get commit date
+	cmd = exec.Command("git", "show", "-s", "--format=%cI", headSHA)
+	dateOutput, err := cmd.Output()
+	var commitDate time.Time
+	if err == nil {
+		dateStr := strings.TrimSpace(string(dateOutput))
+		if t, err := time.Parse(time.RFC3339, dateStr); err == nil {
+			commitDate = t
+		}
+	}
 
 	// Resolve patterns to actual files
 	files, err := GetFilesForPatterns(branch, filePatterns, nil)
@@ -189,9 +262,69 @@ func GetFileInfo(repo, branch string, filePatterns []string) (*PRInfo, error) {
 		BaseRefOid:   headSHA, // We'll use this as a hack for GetPRContext
 		HeadRefOid:   headSHA,
 		IsCommit:     false,
+		CommitDate:   commitDate,
 		BaseRefName:  branch,
 		HeadRefName:  branch,
 		FilePatterns: filePatterns,
+	}, nil
+}
+
+func GetBranchesInfo(repo, base, head string) (*PRInfo, error) {
+	fmt.Printf("    -> Getting comparison info for branches %s...%s...\n", base, head)
+
+	resolveRef := func(ref string) (string, error) {
+		// Try resolving as is
+		cmd := exec.Command("git", "rev-parse", ref)
+		out, err := cmd.Output()
+		if err == nil {
+			return strings.TrimSpace(string(out)), nil
+		}
+
+		// Try resolving as origin/ref
+		cmd = exec.Command("git", "rev-parse", "origin/"+ref)
+		out, err = cmd.Output()
+		if err == nil {
+			return strings.TrimSpace(string(out)), nil
+		}
+
+		// Try resolving as FETCH_HEAD if it was just fetched
+		// But we have two refs, so FETCH_HEAD is not reliable.
+
+		return "", fmt.Errorf("error resolving ref %s: %w", ref, err)
+	}
+
+	// Get head SHA of base
+	baseSHA, err := resolveRef(base)
+	if err != nil {
+		return nil, fmt.Errorf("error resolving base branch %s: %w", base, err)
+	}
+
+	// Get head SHA of head
+	headSHA, err := resolveRef(head)
+	if err != nil {
+		return nil, fmt.Errorf("error resolving head branch %s: %w", head, err)
+	}
+
+	// Get commit date of head
+	cmd := exec.Command("git", "show", "-s", "--format=%cI", headSHA)
+	dateOutput, err := cmd.Output()
+	var commitDate time.Time
+	if err == nil {
+		dateStr := strings.TrimSpace(string(dateOutput))
+		if t, err := time.Parse(time.RFC3339, dateStr); err == nil {
+			commitDate = t
+		}
+	}
+
+	return &PRInfo{
+		Title:       fmt.Sprintf("Review comparison %s...%s", base, head),
+		Body:        fmt.Sprintf("Comparing branch %s (base) with %s (head)", base, head),
+		BaseRefOid:  baseSHA,
+		HeadRefOid:  headSHA,
+		IsCommit:    false,
+		CommitDate:  commitDate,
+		BaseRefName: base,
+		HeadRefName: head,
 	}, nil
 }
 
@@ -232,13 +365,15 @@ func GetPRContext(prInfo *PRInfo, includeFilters, excludeFilters, regexFilters [
 				diffBuilder.WriteString("+" + line + "\n")
 			}
 
+			annDiff, funcs := AnnotateDiff(diffBuilder.String())
 			fileCtx := FileContext{
 				Filename:   file,
-				Diff:       AnnotateDiff(diffBuilder.String()),
+				Diff:       annDiff,
 				AddedLines: lines,
+				Functions:  funcs,
 			}
 
-			if fileCtx.Matches(nil, nil, compiledRegexes) {
+			if fileCtx.Matches(nil, nil, compiledRegexes, prInfo.HeadRefName, nil, nil, "", time.Time{}) {
 				finalFiles = append(finalFiles, fileCtx)
 			}
 		}
@@ -247,6 +382,8 @@ func GetPRContext(prInfo *PRInfo, includeFilters, excludeFilters, regexFilters [
 			Title:       prInfo.Title,
 			Description: prInfo.Body,
 			Files:       finalFiles,
+			Branch:      prInfo.HeadRefName,
+			CommitDate:  prInfo.CommitDate,
 		}, nil
 	}
 
@@ -269,8 +406,11 @@ func GetPRContext(prInfo *PRInfo, includeFilters, excludeFilters, regexFilters [
 			continue
 		}
 
-		fileCtx := ParseAnnotatedFileDiff("diff --git " + fd)
-		if fileCtx.Filename != "" && fileCtx.Matches(nil, nil, compiledRegexes) {
+		annDiff, funcs := AnnotateDiff("diff --git " + fd)
+		fileCtx := ParseAnnotatedFileDiff(annDiff)
+		fileCtx.Functions = funcs
+
+		if fileCtx.Filename != "" && fileCtx.Matches(nil, nil, compiledRegexes, prInfo.HeadRefName, nil, nil, "", time.Time{}) {
 			finalFiles = append(finalFiles, fileCtx)
 		}
 	}
@@ -279,6 +419,8 @@ func GetPRContext(prInfo *PRInfo, includeFilters, excludeFilters, regexFilters [
 		Title:       prInfo.Title,
 		Description: prInfo.Body,
 		Files:       finalFiles,
+		Branch:      prInfo.HeadRefName,
+		CommitDate:  prInfo.CommitDate,
 	}, nil
 }
 
@@ -368,15 +510,18 @@ func GetDiff(baseSHA, headSHA string, includeFilters, excludeFilters []string) (
 	if err != nil {
 		return "", fmt.Errorf("error running git diff: %w, output: %s", err, string(output))
 	}
-	return AnnotateDiff(string(output)), nil
+	annDiff, _ := AnnotateDiff(string(output))
+	return annDiff, nil
 }
 
 var hunkHeaderRegexp = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
 
-func AnnotateDiff(diff string) string {
+func AnnotateDiff(diff string) (string, []string) {
 	var result strings.Builder
+	var functions []string
 	scanner := bufio.NewScanner(strings.NewReader(diff))
 	currentLine := 0
+	funcRegex := regexp.MustCompile(`(?:func|function|class|def|method|type)\s+([a-zA-Z_][a-zA-Z0-9_]*)`)
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -389,6 +534,10 @@ func AnnotateDiff(diff string) string {
 			result.WriteString(line + "\n")
 		} else if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++ ") {
 			result.WriteString(fmt.Sprintf("%d:%s\n", currentLine, line))
+			matches := funcRegex.FindStringSubmatch(line)
+			if len(matches) > 1 {
+				functions = append(functions, matches[1])
+			}
 			currentLine++
 		} else if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "--- ") {
 			result.WriteString(fmt.Sprintf("%d:%s\n", currentLine, line))
@@ -400,7 +549,7 @@ func AnnotateDiff(diff string) string {
 		}
 	}
 
-	return result.String()
+	return result.String(), functions
 }
 
 func GetChangedFiles(baseSHA, headSHA string, includeFilters, excludeFilters []string) ([]string, error) {

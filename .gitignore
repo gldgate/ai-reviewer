@@ -18,7 +18,8 @@ ai-review
 
 # Coverage output
 *.out
-
+# Keys
+KEYS.env
 # Go workspace file
 go.work
 /.idea/

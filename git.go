@@ -91,6 +91,14 @@ func FetchRefs(repo, prNumber, baseRef string) error {
 				return fmt.Errorf("failed to fetch PR head from %s or origin: %v (out1: %s, out2: %s)", remote, err2, string(out), string(out2))
 			}
 		}
+	} else if baseRef != "" {
+		// Fetch specific branch/ref
+		fmt.Printf("    -> Fetching ref %s...\n", baseRef)
+		// Fetch into FETCH_HEAD and also try to update origin/<baseRef>
+		cmd := exec.Command("git", "fetch", remote, fmt.Sprintf("%s:refs/remotes/origin/%s", baseRef, baseRef))
+		if _, err := cmd.CombinedOutput(); err != nil {
+			exec.Command("git", "fetch", "origin", fmt.Sprintf("%s:refs/remotes/origin/%s", baseRef, baseRef)).Run()
+		}
 	} else {
 		// Just fetch the repo to make sure we have latest objects
 		fmt.Printf("    -> Fetching latest from remote...\n")
@@ -121,4 +129,26 @@ func FetchCommit(repo, commitHash string) error {
 		}
 	}
 	return nil
+}
+
+func GetRemoteBranches() ([]string, error) {
+	cmd := exec.Command("git", "branch", "-r")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list remote branches: %w", err)
+	}
+
+	var branches []string
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.Contains(line, " -> ") {
+			continue
+		}
+		// Remove origin/ prefix
+		if strings.HasPrefix(line, "origin/") {
+			branches = append(branches, strings.TrimPrefix(line, "origin/"))
+		}
+	}
+	return branches, nil
 }
