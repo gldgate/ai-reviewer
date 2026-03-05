@@ -142,13 +142,13 @@ func generateReport(prNumber, commitHash, baseSHA, headSHA string, rr *RunResult
 	}
 	out.WriteString(fmt.Sprintf("- **Base Commit:** `%s`\n", baseSHA))
 	out.WriteString(fmt.Sprintf("- **Head Commit:** `%s`\n\n", headSHA))
-	out.WriteString(rr.Summary)
+	out.WriteString(oh.LinkPersonas(rr.Summary))
 	out.WriteString("\n\n")
 
 	if len(rr.PostRunOutputs) > 0 {
 		out.WriteString("## Explanations\n\n")
 		for _, output := range rr.PostRunOutputs {
-			out.WriteString(output)
+			out.WriteString(oh.LinkPersonas(output))
 			out.WriteString("\n\n")
 		}
 	}
@@ -168,7 +168,7 @@ func generateReport(prNumber, commitHash, baseSHA, headSHA string, rr *RunResult
 		cost := (float64(s.TokensIn) * s.InputPrice / 1000000.0) +
 			(float64(s.TokensOut) * s.OutputPrice / 1000000.0)
 
-		out.WriteString(fmt.Sprintf("- %s (%s): In: %d, Out: %d, Time: %dms, Cost: $%.6f\n", oh.MarkPersona(s.PersonaID), s.Model, s.TokensIn, s.TokensOut, s.TimeMS, cost))
+		out.WriteString(fmt.Sprintf("- %s (%s): In: %d, Out: %d, Time: %dms, Cost: $%.6f\n", oh.LinkPersonas(oh.MarkPersona(s.PersonaID)), s.Model, s.TokensIn, s.TokensOut, s.TimeMS, cost))
 		totalIn += s.TokensIn
 		totalOut += s.TokensOut
 		totalCost += cost

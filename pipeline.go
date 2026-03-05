@@ -95,6 +95,8 @@ Severity Hint Guidelines:
 3. medium - issues that could lightly impact perf, mislead future programmers, break established (but non vital) patterns and practices, etc.
 4. low - nitpicks/ cleaning up/ etc.
 
+Fro severity, if the reviewer has indicated a severity assume they are correct.
+
 Return only valid JSON. No extra text.
 `
 

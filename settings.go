@@ -182,6 +182,11 @@ func (h *OutputHandler) MarkPersona(id string) string {
 	return "@persona{" + id + "}"
 }
 
+func (h *OutputHandler) LinkPersonas(s string) string {
+	re := regexp.MustCompile(`@persona\{([^}]+)\}`)
+	return re.ReplaceAllString(s, "[$0]($1/raw.md)")
+}
+
 func (h *OutputHandler) Highlight(s string) string {
 	re := regexp.MustCompile(`@persona\{([^}]+)\}`)
 	return re.ReplaceAllString(s, "\033[32m$1\033[0m")
@@ -254,7 +259,7 @@ func NewRunSettingsFromArgs(args []string) *RunSettings {
 	exeDir := filepath.Dir(exePath)
 
 	s := &RunSettings{
-		Concurrency: 3, // Default concurrency
+		Concurrency: 5, // Default concurrency
 		InitialCwd:  initialCwd,
 		ExeDir:      exeDir,
 	}

@@ -21,16 +21,16 @@ model_mapping:
     output_price_per_million: 3.00
 
   best_code:
-#    provider: gemini
-#    model: gemini-3-pro-preview
-#    max_tokens: 16384
-#    input_price_per_million: 2.00
-#    output_price_per_million: 12.00
     provider: gemini
-    model: gemini-3-flash-preview
+    model: gemini-3.1-pro-preview
     max_tokens: 16384
-    input_price_per_million: 0.50
-    output_price_per_million: 3.00
+    input_price_per_million: 2.00
+    output_price_per_million: 12.00
+#    provider: gemini
+#    model: gemini-3-flash-preview
+#    max_tokens: 16384
+#    input_price_per_million: 0.50
+#    output_price_per_million: 3.00
 
   frontier_best:
     provider: gemini
@@ -55,7 +55,14 @@ global_instructions: |
   2. Do NOT feel obligated to find issues! An ACCURATE report that no issues were found is better than an INACCURATE report that some issues were found.
   2. Provide a single summary of your findings at the end of your report.
   3. Include file names and line numbers where applicable (refer to the unified diff).
+  3. For each issue, include a description, a fix IF there is an obvious and simple one and a severity
   4. Keep your output concise and actionable so reviewers can decide and act quickly.
   5. Review code modified or added by THIS PR ONLY. Do not review code that is merely adjacent to these changes, that is included solely for context.
   5. Do NOT do any reviews or checks outside of your explicit instructions. Focus entirely on YOUR instructions.
   7. You do not necessarily have ALL changes in this PR in your context. Focus on your prompt, don't make inferences about missing features unless that's your job.
+  
+  Severity Hint Guidelines:
+  1. critical - issues that will likely cause catastrophic failures (data loss/corruption, exposure to attack, consensus failures, application crashes, etc). These should NEVER be ignored.
+  2. high - issues that will greatly impact perf, unlikely but possible critical issues, break important patterns, etc.
+  3. medium - issues that could lightly impact perf, mislead future programmers, break established (but non vital) patterns and practices, etc.
+  4. low - nitpicks/ cleaning up/ etc.
