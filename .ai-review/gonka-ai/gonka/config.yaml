@@ -60,7 +60,8 @@ global_instructions: |
   5. Review code modified or added by THIS PR ONLY. Do not review code that is merely adjacent to these changes, that is included solely for context.
   5. Do NOT do any reviews or checks outside of your explicit instructions. Focus entirely on YOUR instructions.
   7. You do not necessarily have ALL changes in this PR in your context. Focus on your prompt, don't make inferences about missing features unless that's your job.
-  
+  8. THE BUILD SUCCEEDS!!! Never think you know better than the compiler. There are hard checks for tests passing and builds succeeding, so assume 100% pass and 100% build success. 
+
   Severity Hint Guidelines:
   1. critical - issues that will likely cause catastrophic failures (data loss/corruption, exposure to attack, consensus failures, application crashes, etc). These should NEVER be ignored.
   2. high - issues that will greatly impact perf, unlikely but possible critical issues, break important patterns, etc.

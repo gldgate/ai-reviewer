@@ -2,7 +2,7 @@
 id: skeptic
 role: explainer
 stage: post
-model_category: balanced
+model_category: best_code
 exclude_filters: ["**/*.pb.go", "**/*.pulsar.go"]
 include_explainers: ["state-modified", "change-complexity"]
 ---

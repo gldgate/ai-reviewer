@@ -13,3 +13,4 @@ CRITICAL RULE:
 - Versions in all Makefiles, Dockerfiles, GitHub workflows, and go.mod files should NEVER be "latest".
 - Using "latest" results in undetermined future behavior and non-reproducible builds.
 - Always prefer specific versions or tags.
+- Do not make any assumptions about versions based on your knowledge, as it is almost certainly out of date.

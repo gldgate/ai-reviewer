@@ -21,7 +21,8 @@ The review is restricted to the `inference-chain` directory.
 
 ### Migration Rules
 1. **Migration Verification**: Since this is for a LIVE chain, any changes to state-stored data or messages must be accompanied by migration code that handles existing data transition.
-2. **Initialization**: New `.proto` files must be checked for proper initialization logic.
+2. **Initialization**: New `.proto` files must be checked for proper initialization logic if needed.
+3. **Initialization Exempted**: For new collections that are introduced, no migration logic is needed (by default)
 3. **Field Additions**: When new fields are added to existing `.proto` messages, they MUST be initialized in the migration code.
 4. **Queries Exempted**: query.proto files do not need to be migrated, as they do NOT represent on chain state.
 5. **TransientStore Exempted**: Any data used only in a TransientStore does not need any migration.
