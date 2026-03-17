@@ -204,7 +204,7 @@ The tool executes a multi-stage pipeline:
 3. **Reviewers**: Executes standard personas. If any **Primers** match the files being analyzed by a persona, they are injected into its prompt as extra context. Each reviewer's raw output is immediately processed by a **Normalization** step (using a cheap model) to extract structured findings (file, line, summary, severity).
 4. **Waiver Evaluation**: Any findings produced by reviewers are checked against applicable **Waivers**. If a waiver matches the location and is confirmed by an LLM, the finding is marked as waived.
 5. **Post-run Explainers**: Executes personas with `role: explainer` and `stage: post`. They provide high-level context or human instructions.
-6. **Aggregation**: All non-waived findings from all reviewers are sent to an **Aggregator** LLM (using the `balanced` model). It deduplicates issues, clusters related findings, and produces a concise Markdown summary.
+6. **Aggregation**: All non-waived findings from all reviewers are sent to an **Aggregator** LLM (using the `balanced` model category). It deduplicates issues, clusters related findings, and produces a concise Markdown summary.
 7. **Reporting**: The final report is printed to stdout and saved to the run directory. Waived findings are listed in a separate section.
 
 ## Output and Artifacts

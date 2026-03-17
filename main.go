@@ -69,7 +69,10 @@ func runOne(ctx context.Context, runConfig *RunConfig, s *RunSettings) {
 	runConfig.OutputHandler.SaveRunFile("summary.md", runConfig.OutputHandler.StripMarkers(runResults.Summary))
 
 	// Log Aggregation usage
-	balancedCfg := runConfig.Config.ModelMapping[string(BestCode)]
+	balancedCfg, cfgErr := runConfig.getAggregationModelConfig()
+	if cfgErr != nil {
+		runConfig.OutputHandler.Printf("Warning: could not resolve aggregation model pricing: %v\n", cfgErr)
+	}
 	aggEntry := RunLogEntry{
 		PersonaID:       "aggregator",
 		Model:           aggResult.Model,

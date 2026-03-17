@@ -469,9 +469,9 @@ func NewRunConfig(ctx context.Context, s *RunSettings) (*RunConfig, error) {
 	}
 
 	// 7. Initialize common clients
-	balancedCfg, ok := rc.Config.ModelMapping[string(BestCode)]
-	if !ok {
-		return nil, fmt.Errorf("'balanced' model mapping not found in config.yaml")
+	balancedCfg, err := rc.getAggregationModelConfig()
+	if err != nil {
+		return nil, err
 	}
 	rc.BalancedClient, err = GetModelClient(ctx, balancedCfg.Provider, balancedCfg.Model, balancedCfg.ReasoningLevel)
 	if err != nil {
@@ -488,6 +488,17 @@ func NewRunConfig(ctx context.Context, s *RunSettings) (*RunConfig, error) {
 	}
 
 	return rc, nil
+}
+
+func (rc *RunConfig) getAggregationModelConfig() (ModelConfig, error) {
+	if cfg, ok := rc.Config.ModelMapping[string(Balanced)]; ok {
+		return cfg, nil
+	}
+	if cfg, ok := rc.Config.ModelMapping[string(BestCode)]; ok {
+		rc.OutputHandler.Println("    Warning: 'balanced' model mapping not found; falling back to 'best_code' for aggregation")
+		return cfg, nil
+	}
+	return ModelConfig{}, fmt.Errorf("'balanced' model mapping not found in config.yaml")
 }
 
 func (rc *RunConfig) filterPersonas() {
@@ -521,7 +532,7 @@ func (rc *RunConfig) filterPersonas() {
 					regexes = append(regexes, re)
 				}
 			}
-			if f.Matches(p.PathFilters, p.ExcludeFilters, regexes, personaContext.Branch, p.BranchFilters, p.FunctionFilters, p.DateFilter, personaContext.CommitDate) {
+			if f.Matches(p.PathFilters, p.ExcludeFilters, regexes, personaContext.Branch, p.BranchFilters, p.FunctionFilters, p.LineNumberFilters, p.DateFilter, personaContext.CommitDate) {
 				skip = false
 				break
 			}

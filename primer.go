@@ -26,8 +26,11 @@ type PrimerMatch struct {
 func LoadPrimers(searchPaths []string, repo string, headSHA string, oh *OutputHandler) ([]Primer, error) {
 	scanner := NewScanner(searchPaths, repo, headSHA, oh)
 	results, err := scanner.Load("primer", func() interface{} { return &Primer{} })
-	if err != nil {
+	if err != nil && len(results) == 0 {
 		return nil, err
+	}
+	if err != nil {
+		oh.Printf("Warning: issues encountered while loading primers: %v\n", err)
 	}
 
 	var primers []Primer
@@ -65,7 +68,7 @@ func (rc *RunConfig) FindMatches(personaContext *PRContext) []PrimerMatch {
 	for _, cp := range compiledPrimers {
 		var matchedFiles []string
 		for _, fileCtx := range personaContext.Files {
-			if fileCtx.Matches(cp.primer.PathFilters, cp.primer.ExcludeFilters, cp.regexes, personaContext.Branch, cp.primer.BranchFilters, cp.primer.FunctionFilters, cp.primer.DateFilter, personaContext.CommitDate) {
+			if fileCtx.Matches(cp.primer.PathFilters, cp.primer.ExcludeFilters, cp.regexes, personaContext.Branch, cp.primer.BranchFilters, cp.primer.FunctionFilters, cp.primer.LineNumberFilters, cp.primer.DateFilter, personaContext.CommitDate) {
 				matchedFiles = append(matchedFiles, fileCtx.Filename)
 			}
 		}

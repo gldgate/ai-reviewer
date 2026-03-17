@@ -40,7 +40,7 @@ type FileContext struct {
 	Functions  []string
 }
 
-func (f FileContext) Matches(includes, excludes []string, regexes []*regexp.Regexp, branch string, branchFilters []string, functionFilters []string, dateFilter string, commitDate time.Time) bool {
+func (f FileContext) Matches(includes, excludes []string, regexes []*regexp.Regexp, branch string, branchFilters []string, functionFilters []string, lineNumberFilters []LineRange, dateFilter string, commitDate time.Time) bool {
 	if !MatchesFilters(f.Filename, includes, excludes) {
 		return false
 	}
@@ -76,6 +76,10 @@ func (f FileContext) Matches(includes, excludes []string, regexes []*regexp.Rege
 		}
 	}
 
+	if !f.HasChangedLinesInRanges(lineNumberFilters) {
+		return false
+	}
+
 	if len(regexes) == 0 {
 		return true
 	}
@@ -87,6 +91,55 @@ func (f FileContext) Matches(includes, excludes []string, regexes []*regexp.Rege
 		}
 	}
 	return false
+}
+
+func (f FileContext) HasChangedLinesInRanges(ranges []LineRange) bool {
+	if len(ranges) == 0 {
+		return true
+	}
+
+	for _, line := range f.ChangedLineNumbers() {
+		for _, r := range ranges {
+			if line >= r.Start && line <= r.End {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func (f FileContext) ChangedLineNumbers() []int {
+	seen := make(map[int]struct{})
+	var lines []int
+
+	for _, line := range strings.Split(f.Diff, "\n") {
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) < 2 {
+			continue
+		}
+
+		lineNo, err := strconv.Atoi(parts[0])
+		if err != nil {
+			continue
+		}
+
+		diffLine := parts[1]
+		if !strings.HasPrefix(diffLine, "+") && !strings.HasPrefix(diffLine, "-") {
+			continue
+		}
+		if strings.HasPrefix(diffLine, "+++ ") || strings.HasPrefix(diffLine, "--- ") {
+			continue
+		}
+		if _, ok := seen[lineNo]; ok {
+			continue
+		}
+
+		seen[lineNo] = struct{}{}
+		lines = append(lines, lineNo)
+	}
+
+	return lines
 }
 
 func (ctx *PRContext) ChangedFiles() []string {
@@ -373,7 +426,7 @@ func GetPRContext(prInfo *PRInfo, includeFilters, excludeFilters, regexFilters [
 				Functions:  funcs,
 			}
 
-			if fileCtx.Matches(nil, nil, compiledRegexes, prInfo.HeadRefName, nil, nil, "", time.Time{}) {
+			if fileCtx.Matches(nil, nil, compiledRegexes, prInfo.HeadRefName, nil, nil, nil, "", time.Time{}) {
 				finalFiles = append(finalFiles, fileCtx)
 			}
 		}
@@ -410,7 +463,7 @@ func GetPRContext(prInfo *PRInfo, includeFilters, excludeFilters, regexFilters [
 		fileCtx := ParseAnnotatedFileDiff(annDiff)
 		fileCtx.Functions = funcs
 
-		if fileCtx.Filename != "" && fileCtx.Matches(nil, nil, compiledRegexes, prInfo.HeadRefName, nil, nil, "", time.Time{}) {
+		if fileCtx.Filename != "" && fileCtx.Matches(nil, nil, compiledRegexes, prInfo.HeadRefName, nil, nil, nil, "", time.Time{}) {
 			finalFiles = append(finalFiles, fileCtx)
 		}
 	}

@@ -215,11 +215,28 @@ func TestFileContext_Matches(t *testing.T) {
 				compiledRegexes = append(compiledRegexes, regexp.MustCompile(r))
 			}
 			fc := FileContext{Filename: tt.file, AddedLines: tt.addedLines}
-			got := fc.Matches(tt.includes, tt.excludes, compiledRegexes, "", nil, nil, "", time.Time{})
+			got := fc.Matches(tt.includes, tt.excludes, compiledRegexes, "", nil, nil, nil, "", time.Time{})
 			if got != tt.want {
 				t.Errorf("FileContext(%q).Matches(%v, %v, %v) = %v, want %v", tt.file, tt.includes, tt.excludes, tt.regexes, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFileContext_MatchesLineNumberFilters(t *testing.T) {
+	fc := FileContext{
+		Filename: "main.go",
+		Diff:     "+++ b/main.go\n@@ -1,2 +10,3 @@\n10:+first\n11: context\n12:-old\n12:+new\n",
+	}
+
+	if !fc.Matches(nil, nil, nil, "", nil, nil, []LineRange{{Start: 10, End: 10}}, "", time.Time{}) {
+		t.Fatalf("expected line range 10-10 to match changed lines")
+	}
+	if !fc.Matches(nil, nil, nil, "", nil, nil, []LineRange{{Start: 12, End: 12}}, "", time.Time{}) {
+		t.Fatalf("expected line range 12-12 to match changed lines")
+	}
+	if fc.Matches(nil, nil, nil, "", nil, nil, []LineRange{{Start: 20, End: 25}}, "", time.Time{}) {
+		t.Fatalf("expected line range 20-25 not to match changed lines")
 	}
 }
 

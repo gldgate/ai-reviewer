@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -36,6 +37,7 @@ func NewScanner(searchPaths []string, repo string, headSHA string, oh *OutputHan
 
 func (s *Scanner) Load(expectedType string, targetFactory func() interface{}) ([]ScanTarget, error) {
 	resultsMap := make(map[string]ScanTarget)
+	var loadErrs []error
 
 	pluralType := expectedType + "s"
 	dedicatedPaths := []string{}
@@ -46,14 +48,20 @@ func (s *Scanner) Load(expectedType string, targetFactory func() interface{}) ([
 
 	// 1. Repo branch (Source of Truth)
 	if s.HeadSHA != "" {
-		repoResults, _ := s.scanRepo(s.HeadSHA, expectedType, targetFactory)
+		repoResults, err := s.scanRepo(s.HeadSHA, expectedType, targetFactory)
+		if err != nil {
+			loadErrs = append(loadErrs, err)
+		}
 		for _, res := range repoResults {
 			resultsMap[res.ID] = res
 		}
 	}
 
 	// 2. Dedicated directories (local)
-	dedicated, _ := s.scanFiles(dedicatedPaths, true, expectedType, targetFactory)
+	dedicated, err := s.scanFiles(dedicatedPaths, true, expectedType, targetFactory)
+	if err != nil {
+		loadErrs = append(loadErrs, err)
+	}
 	for _, res := range dedicated {
 		if _, ok := resultsMap[res.ID]; !ok {
 			resultsMap[res.ID] = res
@@ -61,7 +69,10 @@ func (s *Scanner) Load(expectedType string, targetFactory func() interface{}) ([
 	}
 
 	// 3. All search paths (local, for files with explicit ai_review)
-	other, _ := s.scanFiles(s.SearchPaths, false, expectedType, targetFactory)
+	other, err := s.scanFiles(s.SearchPaths, false, expectedType, targetFactory)
+	if err != nil {
+		loadErrs = append(loadErrs, err)
+	}
 	for _, res := range other {
 		if _, ok := resultsMap[res.ID]; !ok {
 			resultsMap[res.ID] = res
@@ -72,34 +83,53 @@ func (s *Scanner) Load(expectedType string, targetFactory func() interface{}) ([
 	for _, res := range resultsMap {
 		final = append(final, res)
 	}
-	return final, nil
+	return final, errors.Join(loadErrs...)
 }
 
 func (s *Scanner) scanFiles(paths []string, isDedicated bool, expectedType string, targetFactory func() interface{}) ([]ScanTarget, error) {
 	var results []ScanTarget
 	seenIDs := make(map[string]bool)
+	var scanErrs []error
 
 	for _, root := range paths {
+		info, err := os.Stat(root)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				scanErrs = append(scanErrs, fmt.Errorf("error accessing %s: %w", root, err))
+			}
+			continue
+		}
+		if !info.IsDir() {
+			continue
+		}
+
 		_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".md") {
+			if err != nil {
+				scanErrs = append(scanErrs, fmt.Errorf("error walking %s: %w", path, err))
+				return nil
+			}
+			if info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".md") {
 				return nil
 			}
 
 			content, err := os.ReadFile(path)
 			if err != nil {
+				scanErrs = append(scanErrs, fmt.Errorf("error reading %s: %w", path, err))
 				return nil
 			}
 
-			if res, ok := s.processFile(path, content, expectedType, isDedicated, targetFactory); ok {
+			if res, ok, err := s.processFile(path, content, expectedType, isDedicated, targetFactory); ok {
 				if !seenIDs[res.ID] {
 					results = append(results, *res)
 					seenIDs[res.ID] = true
 				}
+			} else if err != nil {
+				scanErrs = append(scanErrs, err)
 			}
 			return nil
 		})
 	}
-	return results, nil
+	return results, errors.Join(scanErrs...)
 }
 
 func (s *Scanner) scanRepo(headSHA string, expectedType string, targetFactory func() interface{}) ([]ScanTarget, error) {
@@ -112,6 +142,7 @@ func (s *Scanner) scanRepo(headSHA string, expectedType string, targetFactory fu
 
 	var results []ScanTarget
 	seenIDs := make(map[string]bool)
+	var scanErrs []error
 
 	for _, file := range allFiles {
 		if !strings.HasSuffix(strings.ToLower(file), ".md") {
@@ -121,24 +152,27 @@ func (s *Scanner) scanRepo(headSHA string, expectedType string, targetFactory fu
 		cmd := exec.Command("git", "show", fmt.Sprintf("%s:%s", headSHA, file))
 		content, err := cmd.Output()
 		if err != nil {
+			scanErrs = append(scanErrs, fmt.Errorf("error reading %s from %s: %w", file, headSHA, err))
 			continue
 		}
 
-		if res, ok := s.processFile(file, content, expectedType, s.isRepoDedicated(file, expectedType), targetFactory); ok {
+		if res, ok, err := s.processFile(file, content, expectedType, s.isRepoDedicated(file, expectedType), targetFactory); ok {
 			if !seenIDs[res.ID] {
 				results = append(results, *res)
 				seenIDs[res.ID] = true
 			}
+		} else if err != nil {
+			scanErrs = append(scanErrs, err)
 		}
 	}
-	return results, nil
+	return results, errors.Join(scanErrs...)
 }
 
-func (s *Scanner) processFile(path string, content []byte, expectedType string, isDedicated bool, targetFactory func() interface{}) (*ScanTarget, bool) {
+func (s *Scanner) processFile(path string, content []byte, expectedType string, isDedicated bool, targetFactory func() interface{}) (*ScanTarget, bool, error) {
 	target := targetFactory()
 	rest, err := frontmatter.Parse(bytes.NewReader(content), target)
 	if err != nil {
-		return nil, false
+		return nil, false, fmt.Errorf("error parsing frontmatter in %s: %w", path, err)
 	}
 
 	aiReview, id := getAIReviewAndID(target, path)
@@ -151,7 +185,7 @@ func (s *Scanner) processFile(path string, content []byte, expectedType string, 
 	}
 
 	if !included {
-		return nil, false
+		return nil, false, nil
 	}
 
 	if id == "" {
@@ -164,7 +198,7 @@ func (s *Scanner) processFile(path string, content []byte, expectedType string, 
 		AIReview:     aiReview,
 		Instructions: string(rest),
 		Raw:          target,
-	}, true
+	}, true, nil
 }
 
 func (s *Scanner) isRepoDedicated(path string, expectedType string) bool {

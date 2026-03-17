@@ -38,8 +38,11 @@ type PersonaRun struct {
 func LoadPersonas(searchPaths []string, repo string, headSHA string, oh *OutputHandler) ([]Persona, error) {
 	scanner := NewScanner(searchPaths, repo, headSHA, oh)
 	results, err := scanner.Load("persona", func() interface{} { return &Persona{} })
-	if err != nil {
+	if err != nil && len(results) == 0 {
 		return nil, err
+	}
+	if err != nil {
+		oh.Printf("Warning: issues encountered while loading personas: %v\n", err)
 	}
 
 	if len(results) == 0 {

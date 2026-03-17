@@ -41,8 +41,11 @@ type WaiverEvaluation struct {
 func LoadWaivers(searchPaths []string, repo string, headSHA string, oh *OutputHandler) ([]Waiver, error) {
 	scanner := NewScanner(searchPaths, repo, headSHA, oh)
 	results, err := scanner.Load("waiver", func() interface{} { return &Waiver{} })
-	if err != nil {
+	if err != nil && len(results) == 0 {
 		return nil, err
+	}
+	if err != nil {
+		oh.Printf("Warning: issues encountered while loading waivers: %v\n", err)
 	}
 
 	var waivers []Waiver
@@ -90,7 +93,7 @@ func ApplyWaivers(ctx context.Context, rc *RunConfig, rr *RunResults) {
 				}
 			}
 
-			if fileCtx.Matches(w.PathFilters, w.ExcludeFilters, regexes, rc.GlobalContext.Branch, w.BranchFilters, w.FunctionFilters, w.DateFilter, rc.GlobalContext.CommitDate) {
+			if fileCtx.Matches(w.PathFilters, w.ExcludeFilters, regexes, rc.GlobalContext.Branch, w.BranchFilters, w.FunctionFilters, w.LineNumberFilters, w.DateFilter, rc.GlobalContext.CommitDate) {
 				// Also check line numbers if specified
 				if len(w.LineNumberFilters) > 0 {
 					lineMatch := false
