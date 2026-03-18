@@ -5,17 +5,11 @@ import (
 )
 
 type Primer struct {
-	ID                string      `yaml:"id"`
-	AIReview          string      `yaml:"ai_review"`
-	Type              string      `yaml:"type"`
-	PathFilters       []string    `yaml:"path_filters"`
-	ExcludeFilters    []string    `yaml:"exclude_filters"`
-	RegexFilters      []string    `yaml:"regex_filters"`
-	BranchFilters     []string    `yaml:"branch_filters"`
-	FunctionFilters   []string    `yaml:"function_filters"`
-	LineNumberFilters []LineRange `yaml:"line_numbers_filter"`
-	DateFilter        string      `yaml:"date_filter"`
-	Content           string
+	ID       string    `yaml:"id"`
+	AIReview string    `yaml:"ai_review"`
+	Type     string    `yaml:"type"`
+	Filters  FilterSet `yaml:",inline"`
+	Content  string
 }
 
 type PrimerMatch struct {
@@ -48,27 +42,31 @@ func (rc *RunConfig) FindMatches(personaContext *PRContext) []PrimerMatch {
 
 	// Pre-compile regexes for all primers
 	type compiledPrimer struct {
-		primer  Primer
-		regexes []*regexp.Regexp
+		primer Primer
+		fs     *FilterSet
 	}
 	var compiledPrimers []compiledPrimer
 	for _, p := range rc.Primers {
-		var regexes []*regexp.Regexp
-		for _, r := range p.RegexFilters {
+		fs := p.Filters
+		for _, r := range fs.RawRegexFilters {
 			re, err := regexp.Compile(r)
 			if err != nil {
 				rc.OutputHandler.Printf("    Warning: invalid regex %s in primer %s: %v\n", r, p.ID, err)
 				continue
 			}
-			regexes = append(regexes, re)
+			fs.RegexFilters = append(fs.RegexFilters, re)
 		}
-		compiledPrimers = append(compiledPrimers, compiledPrimer{primer: p, regexes: regexes})
+		compiledPrimers = append(compiledPrimers, compiledPrimer{primer: p, fs: &fs})
 	}
 
 	for _, cp := range compiledPrimers {
 		var matchedFiles []string
 		for _, fileCtx := range personaContext.Files {
-			if fileCtx.Matches(cp.primer.PathFilters, cp.primer.ExcludeFilters, cp.regexes, personaContext.Branch, cp.primer.BranchFilters, cp.primer.FunctionFilters, cp.primer.LineNumberFilters, cp.primer.DateFilter, personaContext.CommitDate) {
+			if fileCtx.Matches(FileMatchOptions{
+				FilterSet:  cp.fs,
+				Branch:     personaContext.Branch,
+				CommitDate: personaContext.CommitDate,
+			}) {
 				matchedFiles = append(matchedFiles, fileCtx.Filename)
 			}
 		}

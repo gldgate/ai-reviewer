@@ -14,17 +14,11 @@ type LineRange struct {
 }
 
 type Waiver struct {
-	ID                string      `yaml:"id"`
-	AIReview          string      `yaml:"ai_review"`
-	ModelCategory     string      `yaml:"model_category"`
-	PathFilters       []string    `yaml:"path_filters"`
-	ExcludeFilters    []string    `yaml:"exclude_filters"`
-	RegexFilters      []string    `yaml:"regex_filters"`
-	BranchFilters     []string    `yaml:"branch_filters"`
-	FunctionFilters   []string    `yaml:"function_filters"`
-	LineNumberFilters []LineRange `yaml:"line_numbers_filter"`
-	DateFilter        string      `yaml:"date_filter"`
-	Instructions      string
+	ID            string    `yaml:"id"`
+	AIReview      string    `yaml:"ai_review"`
+	ModelCategory string    `yaml:"model_category"`
+	Filters       FilterSet `yaml:",inline"`
+	Instructions  string
 }
 
 type WaiverMatch struct {
@@ -85,17 +79,21 @@ func ApplyWaivers(ctx context.Context, rc *RunConfig, rr *RunResults) {
 				continue
 			}
 
-			var regexes []*regexp.Regexp
-			for _, r := range w.RegexFilters {
+			fs := w.Filters
+			for _, r := range fs.RawRegexFilters {
 				re, err := regexp.Compile(r)
 				if err == nil {
-					regexes = append(regexes, re)
+					fs.RegexFilters = append(fs.RegexFilters, re)
 				}
 			}
 
-			if fileCtx.Matches(w.PathFilters, w.ExcludeFilters, regexes, rc.GlobalContext.Branch, w.BranchFilters, w.FunctionFilters, w.LineNumberFilters, w.DateFilter, rc.GlobalContext.CommitDate) {
+			if fileCtx.Matches(FileMatchOptions{
+				FilterSet:  &fs,
+				Branch:     rc.GlobalContext.Branch,
+				CommitDate: rc.GlobalContext.CommitDate,
+			}) {
 				// Also check line numbers if specified
-				if len(w.LineNumberFilters) > 0 {
+				if len(fs.LineNumberFilters) > 0 {
 					lineMatch := false
 					findingStart := 0
 					if finding.LineStart != nil {
@@ -106,7 +104,7 @@ func ApplyWaivers(ctx context.Context, rc *RunConfig, rr *RunResults) {
 						findingEnd = *finding.LineEnd
 					}
 
-					for _, r := range w.LineNumberFilters {
+					for _, r := range fs.LineNumberFilters {
 						if findingStart >= r.Start && findingEnd <= r.End {
 							lineMatch = true
 							break

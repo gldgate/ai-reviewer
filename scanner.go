@@ -108,7 +108,17 @@ func (s *Scanner) scanFiles(paths []string, isDedicated bool, expectedType strin
 				scanErrs = append(scanErrs, fmt.Errorf("error walking %s: %w", path, err))
 				return nil
 			}
-			if info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".md") {
+
+			// Optimistically skip known large/unrelated directories
+			if info.IsDir() {
+				name := info.Name()
+				if name == "runs" || name == ".git" || name == "node_modules" || name == "vendor" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+
+			if !strings.HasSuffix(strings.ToLower(path), ".md") {
 				return nil
 			}
 
@@ -149,6 +159,13 @@ func (s *Scanner) scanRepo(headSHA string, expectedType string, targetFactory fu
 			continue
 		}
 
+		// Optimistically skip known large/unrelated directories in repo
+		if strings.Contains(file, "/runs/") || strings.HasPrefix(file, "runs/") ||
+			strings.Contains(file, "/node_modules/") || strings.HasPrefix(file, "node_modules/") ||
+			strings.Contains(file, "/vendor/") || strings.HasPrefix(file, "vendor/") {
+			continue
+		}
+
 		cmd := exec.Command("git", "show", fmt.Sprintf("%s:%s", headSHA, file))
 		content, err := cmd.Output()
 		if err != nil {
@@ -169,6 +186,13 @@ func (s *Scanner) scanRepo(headSHA string, expectedType string, targetFactory fu
 }
 
 func (s *Scanner) processFile(path string, content []byte, expectedType string, isDedicated bool, targetFactory func() interface{}) (*ScanTarget, bool, error) {
+	// Lightweight check for ai_review tag if not in a dedicated directory
+	if !isDedicated {
+		if !bytes.Contains(content, []byte("ai_review:")) {
+			return nil, false, nil
+		}
+	}
+
 	target := targetFactory()
 	rest, err := frontmatter.Parse(bytes.NewReader(content), target)
 	if err != nil {

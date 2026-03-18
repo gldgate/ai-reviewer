@@ -13,20 +13,14 @@ type Persona struct {
 	ID                string `yaml:"id"`
 	AIReview          string `yaml:"ai_review"`
 	ColoredID         string
-	ModelCategory     string      `yaml:"model_category"`
-	MaxTokens         int         `yaml:"max_tokens"`
-	PathFilters       []string    `yaml:"path_filters"`
-	ExcludeFilters    []string    `yaml:"exclude_filters"`
-	RegexFilters      []string    `yaml:"regex_filters"`
-	BranchFilters     []string    `yaml:"branch_filters"`
-	FunctionFilters   []string    `yaml:"function_filters"`
-	LineNumberFilters []LineRange `yaml:"line_numbers_filter"`
-	DateFilter        string      `yaml:"date_filter"`
-	Role              string      `yaml:"role"`  // reviewer (default) | explainer
-	Stage             string      `yaml:"stage"` // pre | post
-	IncludeFindings   bool        `yaml:"include_findings"`
-	IncludeExplainers []string    `yaml:"include_explainers"`
-	ExcludeDiff       bool        `yaml:"exclude_diff"`
+	ModelCategory     string    `yaml:"model_category"`
+	MaxTokens         int       `yaml:"max_tokens"`
+	Filters           FilterSet `yaml:",inline"`
+	Role              string    `yaml:"role"`  // reviewer (default) | explainer
+	Stage             string    `yaml:"stage"` // pre | post
+	IncludeFindings   bool      `yaml:"include_findings"`
+	IncludeExplainers []string  `yaml:"include_explainers"`
+	ExcludeDiff       bool      `yaml:"exclude_diff"`
 	Instructions      string
 }
 

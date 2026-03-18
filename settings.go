@@ -448,7 +448,7 @@ func NewRunConfig(ctx context.Context, s *RunSettings) (*RunConfig, error) {
 
 	// 4. Extract context
 	rc.OutputHandler.Println("--- Extracting PR context...")
-	rc.GlobalContext, err = GetPRContext(rc.PRInfo, s.FilePatterns, nil, nil)
+	rc.GlobalContext, err = GetPRContext(rc.PRInfo, &FilterSet{IncludeFilters: s.FilePatterns})
 	if err != nil {
 		return nil, fmt.Errorf("error getting context: %w", err)
 	}
@@ -504,16 +504,16 @@ func (rc *RunConfig) getAggregationModelConfig() (ModelConfig, error) {
 func (rc *RunConfig) filterPersonas() {
 	rc.OutputHandler.Println("--- Filtering personas...")
 	for _, p := range rc.Personas {
-		includes := p.PathFilters
-		if len(includes) == 0 && rc.PRInfo.BaseRefOid == rc.PRInfo.HeadRefOid && !rc.PRInfo.IsCommit {
-			includes = rc.PRInfo.FilePatterns
+		fs := p.Filters
+		if len(fs.IncludeFilters) == 0 && rc.PRInfo.BaseRefOid == rc.PRInfo.HeadRefOid && !rc.PRInfo.IsCommit {
+			fs.IncludeFilters = rc.PRInfo.FilePatterns
 		}
 
 		var personaContext *PRContext
-		if len(includes) > 0 || len(p.ExcludeFilters) > 0 || len(p.RegexFilters) > 0 || (rc.PRInfo.BaseRefOid == rc.PRInfo.HeadRefOid && !rc.PRInfo.IsCommit && rc.PRInfo.BaseRefOid != "") ||
-			len(p.BranchFilters) > 0 || len(p.FunctionFilters) > 0 || p.DateFilter != "" {
+		if len(fs.IncludeFilters) > 0 || len(fs.ExcludeFilters) > 0 || len(fs.RawRegexFilters) > 0 || (rc.PRInfo.BaseRefOid == rc.PRInfo.HeadRefOid && !rc.PRInfo.IsCommit && rc.PRInfo.BaseRefOid != "") ||
+			len(fs.BranchFilters) > 0 || len(fs.FunctionFilters) > 0 || fs.DateFilter != "" {
 			var err error
-			personaContext, err = GetPRContext(rc.PRInfo, includes, p.ExcludeFilters, p.RegexFilters)
+			personaContext, err = GetPRContext(rc.PRInfo, &fs)
 			if err != nil {
 				rc.OutputHandler.Printf("    Warning: error filtering context for persona %s: %v\n", p.ColoredID, err)
 				continue
@@ -525,14 +525,20 @@ func (rc *RunConfig) filterPersonas() {
 		run := PersonaRun{Persona: p, Context: personaContext}
 		skip := true
 		for _, f := range personaContext.Files {
-			var regexes []*regexp.Regexp
-			for _, r := range p.RegexFilters {
-				re, err := regexp.Compile(r)
-				if err == nil {
-					regexes = append(regexes, re)
+			// Pre-compile regexes for efficiency
+			if len(fs.RegexFilters) == 0 && len(fs.RawRegexFilters) > 0 {
+				for _, r := range fs.RawRegexFilters {
+					re, err := regexp.Compile(r)
+					if err == nil {
+						fs.RegexFilters = append(fs.RegexFilters, re)
+					}
 				}
 			}
-			if f.Matches(p.PathFilters, p.ExcludeFilters, regexes, personaContext.Branch, p.BranchFilters, p.FunctionFilters, p.LineNumberFilters, p.DateFilter, personaContext.CommitDate) {
+			if f.Matches(FileMatchOptions{
+				FilterSet:  &fs,
+				Branch:     personaContext.Branch,
+				CommitDate: personaContext.CommitDate,
+			}) {
 				skip = false
 				break
 			}

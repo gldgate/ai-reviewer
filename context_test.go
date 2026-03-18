@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-func TestMatchesFilters(t *testing.T) {
+func TestFilterSet_MatchesPath(t *testing.T) {
 	tests := []struct {
 		name     string
 		file     string
@@ -144,9 +144,13 @@ func TestMatchesFilters(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := MatchesFilters(tt.file, tt.includes, tt.excludes)
+			fs := &FilterSet{
+				IncludeFilters: tt.includes,
+				ExcludeFilters: tt.excludes,
+			}
+			got := fs.MatchesPath(tt.file)
 			if got != tt.want {
-				t.Errorf("MatchesFilters(%q, %v, %v) = %v, want %v", tt.file, tt.includes, tt.excludes, got, tt.want)
+				t.Errorf("FilterSet.MatchesPath(%q, %v, %v) = %v, want %v", tt.file, tt.includes, tt.excludes, got, tt.want)
 			}
 		})
 	}
@@ -154,13 +158,13 @@ func TestMatchesFilters(t *testing.T) {
 
 func TestFileContext_Matches(t *testing.T) {
 	tests := []struct {
-		name       string
-		file       string
-		addedLines []string
-		includes   []string
-		excludes   []string
-		regexes    []string
-		want       bool
+		name         string
+		file         string
+		changedLines []string
+		includes     []string
+		excludes     []string
+		regexes      []string
+		want         bool
 	}{
 		{
 			name:     "No filters",
@@ -171,40 +175,49 @@ func TestFileContext_Matches(t *testing.T) {
 			want:     true,
 		},
 		{
-			name:       "Match regex in added lines",
-			file:       "main.go",
-			addedLines: []string{"TODO: fix this"},
-			includes:   []string{"*.go"},
-			excludes:   nil,
-			regexes:    []string{"TODO"},
-			want:       true,
+			name:         "Match regex in changed lines (added)",
+			file:         "main.go",
+			changedLines: []string{"TODO: fix this"},
+			includes:     []string{"*.go"},
+			excludes:     nil,
+			regexes:      []string{"TODO"},
+			want:         true,
 		},
 		{
-			name:       "Regex doesn't match added lines",
-			file:       "main.go",
-			addedLines: []string{"fmt.Println(\"hello\")"},
-			includes:   []string{"*.go"},
-			excludes:   nil,
-			regexes:    []string{"TODO"},
-			want:       false,
+			name:         "Match regex in changed lines (removed)",
+			file:         "main.go",
+			changedLines: []string{"FIXME: removed"},
+			includes:     []string{"*.go"},
+			excludes:     nil,
+			regexes:      []string{"FIXME"},
+			want:         true,
 		},
 		{
-			name:       "Excluded file ignores regex match",
-			file:       "test.go",
-			addedLines: []string{"TODO: fix this"},
-			includes:   []string{"*.go"},
-			excludes:   []string{"test.go"},
-			regexes:    []string{"TODO"},
-			want:       false,
+			name:         "Regex doesn't match changed lines",
+			file:         "main.go",
+			changedLines: []string{"fmt.Println(\"hello\")"},
+			includes:     []string{"*.go"},
+			excludes:     nil,
+			regexes:      []string{"TODO"},
+			want:         false,
 		},
 		{
-			name:       "Match include, no regexes",
-			file:       "main.go",
-			addedLines: []string{"something"},
-			includes:   []string{"*.go"},
-			excludes:   nil,
-			regexes:    nil,
-			want:       true,
+			name:         "Excluded file ignores regex match",
+			file:         "test.go",
+			changedLines: []string{"TODO: fix this"},
+			includes:     []string{"*.go"},
+			excludes:     []string{"test.go"},
+			regexes:      []string{"TODO"},
+			want:         false,
+		},
+		{
+			name:         "Match include, no regexes",
+			file:         "main.go",
+			changedLines: []string{"something"},
+			includes:     []string{"*.go"},
+			excludes:     nil,
+			regexes:      nil,
+			want:         true,
 		},
 	}
 
@@ -214,8 +227,17 @@ func TestFileContext_Matches(t *testing.T) {
 			for _, r := range tt.regexes {
 				compiledRegexes = append(compiledRegexes, regexp.MustCompile(r))
 			}
-			fc := FileContext{Filename: tt.file, AddedLines: tt.addedLines}
-			got := fc.Matches(tt.includes, tt.excludes, compiledRegexes, "", nil, nil, nil, "", time.Time{})
+			fc := FileContext{Filename: tt.file, ChangedLines: tt.changedLines}
+			fs := &FilterSet{
+				IncludeFilters: tt.includes,
+				ExcludeFilters: tt.excludes,
+			}
+			for _, r := range tt.regexes {
+				fs.RegexFilters = append(fs.RegexFilters, regexp.MustCompile(r))
+			}
+			got := fc.Matches(FileMatchOptions{
+				FilterSet: fs,
+			})
 			if got != tt.want {
 				t.Errorf("FileContext(%q).Matches(%v, %v, %v) = %v, want %v", tt.file, tt.includes, tt.excludes, tt.regexes, got, tt.want)
 			}
@@ -229,14 +251,116 @@ func TestFileContext_MatchesLineNumberFilters(t *testing.T) {
 		Diff:     "+++ b/main.go\n@@ -1,2 +10,3 @@\n10:+first\n11: context\n12:-old\n12:+new\n",
 	}
 
-	if !fc.Matches(nil, nil, nil, "", nil, nil, []LineRange{{Start: 10, End: 10}}, "", time.Time{}) {
+	if !fc.Matches(FileMatchOptions{FilterSet: &FilterSet{LineNumberFilters: []LineRange{{Start: 10, End: 10}}}}) {
 		t.Fatalf("expected line range 10-10 to match changed lines")
 	}
-	if !fc.Matches(nil, nil, nil, "", nil, nil, []LineRange{{Start: 12, End: 12}}, "", time.Time{}) {
+	if !fc.Matches(FileMatchOptions{FilterSet: &FilterSet{LineNumberFilters: []LineRange{{Start: 12, End: 12}}}}) {
 		t.Fatalf("expected line range 12-12 to match changed lines")
 	}
-	if fc.Matches(nil, nil, nil, "", nil, nil, []LineRange{{Start: 20, End: 25}}, "", time.Time{}) {
+	if fc.Matches(FileMatchOptions{FilterSet: &FilterSet{LineNumberFilters: []LineRange{{Start: 20, End: 25}}}}) {
 		t.Fatalf("expected line range 20-25 not to match changed lines")
+	}
+}
+
+func TestFilterSet_Matches(t *testing.T) {
+	tests := []struct {
+		name string
+		fs   FilterSet
+		opts MatchOptions
+		want bool
+	}{
+		{
+			name: "Include path filter match",
+			fs:   FilterSet{IncludeFilters: []string{"*.go"}},
+			opts: MatchOptions{Filename: "main.go"},
+			want: true,
+		},
+		{
+			name: "Exclude path filter match",
+			fs:   FilterSet{ExcludeFilters: []string{"test.go"}},
+			opts: MatchOptions{Filename: "test.go"},
+			want: false,
+		},
+		{
+			name: "Branch filter match",
+			fs:   FilterSet{BranchFilters: []string{"main"}},
+			opts: MatchOptions{Branch: "main", Filename: "main.go"},
+			want: true,
+		},
+		{
+			name: "Branch filter no match",
+			fs:   FilterSet{BranchFilters: []string{"main"}},
+			opts: MatchOptions{Branch: "feature", Filename: "main.go"},
+			want: false,
+		},
+		{
+			name: "Function filter match",
+			fs:   FilterSet{FunctionFilters: []string{"MainFunc"}},
+			opts: MatchOptions{Functions: []string{"HelperFunc", "MainFunc"}, Filename: "main.go"},
+			want: true,
+		},
+		{
+			name: "Function filter no match",
+			fs:   FilterSet{FunctionFilters: []string{"OtherFunc"}},
+			opts: MatchOptions{Functions: []string{"HelperFunc", "MainFunc"}, Filename: "main.go"},
+			want: false,
+		},
+		{
+			name: "Date filter match (before cutoff)",
+			fs:   FilterSet{DateFilter: "2023-01-01"},
+			opts: MatchOptions{CommitDate: time.Date(2022, 12, 31, 0, 0, 0, 0, time.UTC), Filename: "main.go"},
+			want: true,
+		},
+		{
+			name: "Date filter no match (after cutoff)",
+			fs:   FilterSet{DateFilter: "2023-01-01"},
+			opts: MatchOptions{CommitDate: time.Date(2023, 1, 2, 0, 0, 0, 0, time.UTC), Filename: "main.go"},
+			want: false,
+		},
+		{
+			name: "Line number filter match",
+			fs:   FilterSet{LineNumberFilters: []LineRange{{Start: 10, End: 20}}},
+			opts: MatchOptions{ChangedLineNumbers: []int{15}, Filename: "main.go"},
+			want: true,
+		},
+		{
+			name: "Line number filter no match",
+			fs:   FilterSet{LineNumberFilters: []LineRange{{Start: 10, End: 20}}},
+			opts: MatchOptions{ChangedLineNumbers: []int{25}, Filename: "main.go"},
+			want: false,
+		},
+		{
+			name: "Regex filter match",
+			fs:   FilterSet{RegexFilters: []*regexp.Regexp{regexp.MustCompile("TODO")}},
+			opts: MatchOptions{ChangedLines: []string{"// TODO: fix this"}, Filename: "main.go"},
+			want: true,
+		},
+		{
+			name: "Regex filter no match",
+			fs:   FilterSet{RegexFilters: []*regexp.Regexp{regexp.MustCompile("TODO")}},
+			opts: MatchOptions{ChangedLines: []string{"fmt.Println(\"hello\")"}, Filename: "main.go"},
+			want: false,
+		},
+		{
+			name: "Multiple filters match (Path and Branch)",
+			fs:   FilterSet{IncludeFilters: []string{"*.go"}, BranchFilters: []string{"main"}},
+			opts: MatchOptions{Filename: "main.go", Branch: "main"},
+			want: true,
+		},
+		{
+			name: "Multiple filters (Path match, Branch mismatch)",
+			fs:   FilterSet{IncludeFilters: []string{"*.go"}, BranchFilters: []string{"main"}},
+			opts: MatchOptions{Filename: "main.go", Branch: "feature"},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.fs.Matches(tt.opts); got != tt.want {
+				t.Errorf("FilterSet.Matches() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -310,5 +434,98 @@ func TestPathIncluded(t *testing.T) {
 				t.Errorf("pathIncluded(%q, %v) = %v, want %v", tt.path, tt.globs, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFileContext_HasChangedLinesInRanges(t *testing.T) {
+	fc := FileContext{
+		Diff: "10:+first\n11: context\n12:-old\n12:+new\n",
+	}
+
+	tests := []struct {
+		name   string
+		ranges []LineRange
+		want   bool
+	}{
+		{
+			name:   "Empty ranges match all",
+			ranges: nil,
+			want:   true,
+		},
+		{
+			name:   "Match start range",
+			ranges: []LineRange{{Start: 10, End: 10}},
+			want:   true,
+		},
+		{
+			name:   "Match end range",
+			ranges: []LineRange{{Start: 12, End: 12}},
+			want:   true,
+		},
+		{
+			name:   "No match",
+			ranges: []LineRange{{Start: 20, End: 30}},
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := fc.HasChangedLinesInRanges(tt.ranges); got != tt.want {
+				t.Errorf("HasChangedLinesInRanges() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFileContext_ChangedLineNumbers(t *testing.T) {
+	fc := FileContext{
+		Diff: "10:+first\n11: context\n12:-old\n12:+new\n13: no change\n",
+	}
+
+	got := fc.ChangedLineNumbers()
+	want := []int{10, 12}
+
+	if len(got) != len(want) {
+		t.Errorf("ChangedLineNumbers() returned %d lines, want %d", len(got), len(want))
+	}
+
+	for i, v := range got {
+		if v != want[i] {
+			t.Errorf("ChangedLineNumbers()[%d] = %d, want %d", i, v, want[i])
+		}
+	}
+}
+
+func TestParseAnnotatedFileDiff(t *testing.T) {
+	diff := `+++ b/main.go
+10:+func main() {
+11: 	fmt.Println("hello")
+12:-	// old comment
+12:+	// new comment
+13: }`
+
+	fc := ParseAnnotatedFileDiff(diff)
+
+	if fc.Filename != "main.go" {
+		t.Errorf("ParseAnnotatedFileDiff() Filename = %q, want %q", fc.Filename, "main.go")
+	}
+
+	if len(fc.ChangedLines) != 3 {
+		t.Fatalf("ParseAnnotatedFileDiff() ChangedLines length = %d, want 3", len(fc.ChangedLines))
+	}
+
+	// Order in ParseAnnotatedFileDiff:
+	// 10:+ -> appends "func main() {"
+	// 12:- -> appends "	// old comment" (wait, does it include whitespace?)
+	// 12:+ -> appends "	// new comment"
+
+	// Looking at code: content := diffLine[1:]
+
+	expected := []string{"func main() {", "\t// old comment", "\t// new comment"}
+	for i, v := range fc.ChangedLines {
+		if v != expected[i] {
+			t.Errorf("ChangedLines[%d] = %q, want %q", i, v, expected[i])
+		}
 	}
 }
