@@ -3,7 +3,7 @@ id: go-reviewer
 ai_review: persona
 model_category: balanced
 path_filters:
-  - "src/**/*.go"
+  - "src/**"
 exclude_filters:
   - "src/core/**"
 ---

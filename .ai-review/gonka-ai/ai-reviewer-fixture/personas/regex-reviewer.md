@@ -3,7 +3,7 @@ id: regex-reviewer
 ai_review: persona
 model_category: balanced
 path_filters:
-  - "src/api/**/*.go"
+  - "src/api/**"
 regex_filters:
   - "TODO"
   - "admin"

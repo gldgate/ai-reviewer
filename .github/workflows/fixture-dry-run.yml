@@ -1,0 +1,45 @@
+name: Fixture Dry Run
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/fixture-dry-run.yml"
+      - "scripts/check_fixture_dry_run.sh"
+      - ".ai-review/gonka-ai/ai-reviewer-fixture/**"
+      - "*.go"
+      - "go.mod"
+      - "go.sum"
+  pull_request:
+    paths:
+      - ".github/workflows/fixture-dry-run.yml"
+      - "scripts/check_fixture_dry_run.sh"
+      - ".ai-review/gonka-ai/ai-reviewer-fixture/**"
+      - "*.go"
+      - "go.mod"
+      - "go.sum"
+
+jobs:
+  fixture-dry-run:
+    runs-on: macos-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Show tool versions
+        run: |
+          go version
+          gh --version
+
+      - name: Run fixture dry-run checks
+        run: bash scripts/check_fixture_dry_run.sh
