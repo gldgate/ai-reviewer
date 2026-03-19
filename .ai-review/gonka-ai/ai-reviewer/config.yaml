@@ -1,0 +1,106 @@
+default_profile: gemini_standard
+
+model_profiles:
+  anthropic:
+    cheap:
+      id: anthropic_haiku_3
+    balanced:
+      id: anthropic_haiku_4.5
+    fastest_good:
+      id: anthropic_haiku_4.5
+    best_code:
+      id: anthropic_sonnet_4.6
+      reasoning_level: low
+    frontier_best:
+      id: anthropic_opus_4.6
+
+  anthropic_cheap:
+    cheap:
+      id: anthropic_haiku_3
+    balanced:
+      id: anthropic_haiku_3
+    fastest_good:
+      id: anthropic_haiku_3
+    best_code:
+      id: anthropic_haiku_4.5
+      reasoning_level: low
+    frontier_best:
+      id: anthropic_haiku_4.5
+
+  gemini_low:
+    cheap:
+      id: gemini_2.5_flash_lite
+    balanced:
+      id: gemini_2.5_flash
+    fastest_good:
+      id: gemini_3_flash_preview
+    best_code:
+      id: gemini_3_flash_preview
+      reasoning_level: low
+    frontier_best:
+      id: gemini_3.1_pro_preview
+      reasoning_level: high
+
+  gemini_standard:
+    cheap:
+      id: gemini_2.5_flash_lite
+    balanced:
+      id: gemini_2.5_flash
+    fastest_good:
+      id: gemini_3_flash_preview
+    best_code:
+      id: gemini_3.1_pro_preview
+      reasoning_level: low
+    frontier_best:
+      id: gemini_3.1_pro_preview
+      reasoning_level: high
+
+  gemini_high:
+    cheap:
+      id: gemini_2.5_flash
+    balanced:
+      id: gemini_3_flash_preview
+    fastest_good:
+      id: gemini_3.1_pro_preview
+      reasoning_level: low
+    best_code:
+      id: gemini_3.1_pro_preview
+      reasoning_level: high
+    frontier_best:
+      id: gemini_3.1_pro_preview
+      reasoning_level: high
+
+  openai:
+    cheap:
+      id: gpt_5.4_nano
+    balanced:
+      id: gpt_5.4_mini
+    fastest_good:
+      id: gpt_5.4_mini
+    best_code:
+      id: gpt_5.4
+      reasoning_level: low
+    frontier_best:
+      id: gpt_5.4_pro
+
+  openai_cheap:
+    cheap:
+      id: gpt_5.4_nano
+    balanced:
+      id: gpt_5.4_nano
+    fastest_good:
+      id: gpt_5.4_nano
+    best_code:
+      id: gpt_5.4_mini
+    frontier_best:
+      id: gpt_5.4_mini
+
+global_instructions: |
+  This repository implements the ai-reviewer tool itself.
+  Follow these rules:
+  1. Mention only real, evidence-backed issues in the changed code.
+  2. A correct report with no findings is better than a noisy one.
+  3. Focus on how the tool behaves for end users running reviews, dry-runs, CI checks, and provider integrations.
+  4. Do not speculate about code outside the diff unless a changed call site clearly makes that behavior relevant.
+  5. Prefer concrete findings about correctness, trust, review quality, cost, or operator surprise over stylistic commentary.
+  6. Include file paths and line references where possible.
