@@ -40,10 +40,9 @@ func (s *Scanner) Load(expectedType string, targetFactory func() interface{}) ([
 	var loadErrs []error
 
 	pluralType := expectedType + "s"
-	dedicatedPaths := []string{}
+	repoScopedPaths := []string{}
 	for _, base := range s.SearchPaths {
-		dedicatedPaths = append(dedicatedPaths, filepath.Join(base, ".ai-review", s.Repo, pluralType))
-		dedicatedPaths = append(dedicatedPaths, filepath.Join(base, ".ai-review", pluralType))
+		repoScopedPaths = append(repoScopedPaths, filepath.Join(base, ".ai-review", s.Repo, pluralType))
 	}
 
 	// 1. Repo branch (Source of Truth)
@@ -57,23 +56,12 @@ func (s *Scanner) Load(expectedType string, targetFactory func() interface{}) ([
 		}
 	}
 
-	// 2. Dedicated directories (local)
-	dedicated, err := s.scanFiles(dedicatedPaths, true, expectedType, targetFactory)
+	// 2. Repo-scoped dedicated directories (local overrides)
+	dedicated, err := s.scanFiles(repoScopedPaths, true, expectedType, targetFactory)
 	if err != nil {
 		loadErrs = append(loadErrs, err)
 	}
 	for _, res := range dedicated {
-		if _, ok := resultsMap[res.ID]; !ok {
-			resultsMap[res.ID] = res
-		}
-	}
-
-	// 3. All search paths (local, for files with explicit ai_review)
-	other, err := s.scanFiles(s.SearchPaths, false, expectedType, targetFactory)
-	if err != nil {
-		loadErrs = append(loadErrs, err)
-	}
-	for _, res := range other {
 		if _, ok := resultsMap[res.ID]; !ok {
 			resultsMap[res.ID] = res
 		}
