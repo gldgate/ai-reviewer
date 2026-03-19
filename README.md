@@ -2,6 +2,15 @@
 
 A single-binary Go CLI that reviews a GitHub PR using AI personas.
 
+## The Vision
+AI code review is becoming essential, especially as more code is itself AI-generated. `ai-reviewer` is built on the idea that good review is not one prompt, but an orchestration problem: multiple specialized reviewers, project-specific context, and clear policy working together to produce high-signal, cost-conscious feedback.
+
+- Specialized personas instead of one generic reviewer
+- Repo-aware primers and waivers instead of ambient global behavior
+- Structured findings and auditable artifacts instead of opaque output
+
+See [VISION.md](VISION.md) for the longer rationale and design philosophy.
+
 ## Usage
 
 ```bash
