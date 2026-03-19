@@ -113,17 +113,17 @@ The aggregation path now prefers the `balanced` model category, with a compatibi
 
 The codebase is still small and uses a flat `main` package. The important files are:
 
-- [main.go](ai-reviewer/main.go): entrypoint and top-level pipeline execution
-- [settings.go](/Users/johnlong/GolandProjects/ai-reviewer/settings.go): CLI parsing, run configuration, run planning, output/logging helpers
-- [context.go](/Users/johnlong/GolandProjects/ai-reviewer/context.go): git/GitHub context extraction, diff parsing, filter matching, prompt construction
-- [scanner.go](/Users/johnlong/GolandProjects/ai-reviewer/scanner.go): discovery and loading of personas, primers, and waivers
-- [persona.go](/Users/johnlong/GolandProjects/ai-reviewer/persona.go): persona model and execution logic
-- [primer.go](/Users/johnlong/GolandProjects/ai-reviewer/primer.go): primer model and matching
-- [waiver.go](/Users/johnlong/GolandProjects/ai-reviewer/waiver.go): waiver model and evaluation
-- [pipeline.go](/Users/johnlong/GolandProjects/ai-reviewer/pipeline.go): structured finding model, normalization, aggregation prompts
-- [models.go](/Users/johnlong/GolandProjects/ai-reviewer/models.go): provider adapters for OpenAI, Anthropic, and Gemini
-- [config.go](/Users/johnlong/GolandProjects/ai-reviewer/config.go): config loading and merging
-- [git.go](/Users/johnlong/GolandProjects/ai-reviewer/git.go): repository acquisition and ref fetching
+- [main.go](main.go): entrypoint and top-level pipeline execution
+- [settings.go](settings.go): CLI parsing, run configuration, run planning, output/logging helpers
+- [context.go](context.go): git/GitHub context extraction, diff parsing, filter matching, prompt construction
+- [scanner.go](scanner.go): discovery and loading of personas, primers, and waivers
+- [persona.go](persona.go): persona model and execution logic
+- [primer.go](primer.go): primer model and matching
+- [waiver.go](waiver.go): waiver model and evaluation
+- [pipeline.go](pipeline.go): structured finding model, normalization, aggregation prompts
+- [models.go](models.go): provider adapters for OpenAI, Anthropic, and Gemini
+- [config.go](config.go): config loading and merging
+- [git.go](git.go): repository acquisition and ref fetching
 
 ## End-to-End Flow
 
