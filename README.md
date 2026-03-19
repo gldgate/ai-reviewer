@@ -22,7 +22,7 @@ go build -o ai-review
 ### Global CLI Options
 
 - `--max-tokens <n>`: Override the maximum tokens for AI responses.
-- `--concurrency <n>`: Set the maximum number of personas to run concurrently (default: 3).
+- `--concurrency <n>`: Set the maximum number of personas to run concurrently (default: 5).
 - `--dry-run`: Scan and report what personas and primers will be applied, but do not execute any AI calls. Useful for testing configuration and filtering logic without incurring costs.
 
 ### Examples:
@@ -51,14 +51,16 @@ go build -o ai-review
 1. Install Go 1.25+
 2. Install GitHub CLI (`gh`) and authenticate: `gh auth login`
 3. Install Git
-4. Set up environment variables for AI providers:
-   - `OPENAI_API_KEY`
-   - `ANTHROPIC_API_KEY`
-   - `GEMINI_API_KEY`
+4. Set up credentials for the AI providers you actually use in `config.yaml`:
+   - `OPENAI_API_KEY` for `provider: openai`
+   - `ANTHROPIC_API_KEY` for `provider: anthropic`
+   - `GEMINI_API_KEY` for `provider: gemini`
+
+You do not need to set all three unless your configuration uses all three.
 
 ## Configuration
 
-The tool expects a `.ai-review` directory. Configuration can be global (in `.ai-review/`) or specific to a repository (in `.ai-review/<repo_owner>/<repo_name>/`). Review artifacts such as personas, primers, and waivers are intended to be repository-specific under `.ai-review/<repo_owner>/<repo_name>/...`.
+The tool expects repository-specific configuration under `.ai-review/<repo_owner>/<repo_name>/`. The main config file lives at `.ai-review/<repo_owner>/<repo_name>/config.yaml`, and local personas, primers, and waivers also live under that repo-scoped directory tree.
 
 ### Model Mapping
 
@@ -97,12 +99,14 @@ primer_types:
 
 The tool scans for personas, primers, and waivers in two locations:
 
-- **Repository-wide Scanning**: The tool scans all `.md` files in the repository branch being evaluated. A file is included as a persona, primer, or waiver if it contains an explicit `ai_review: persona`, `ai_review: primer`, or `ai_review: waiver` field in its YAML frontmatter. This allows you to keep these artifacts alongside the code they relate to.
-- **Repo-scoped Local Directories**: Any `.md` file within `.ai-review/<owner>/<repo>/personas/`, `.ai-review/<owner>/<repo>/primers/`, or `.ai-review/<owner>/<repo>/waivers/` is automatically loaded. All subdirectories are searched recursively, allowing you to organize them by purpose or mirror the project structure. Files in these directories do **not** require an `ai_review` field in their frontmatter.
+- **Repository branch scanning**: The tool scans all `.md` files in the repository branch being evaluated. A file is included as a persona, primer, or waiver if it contains an explicit `ai_review: persona`, `ai_review: primer`, or `ai_review: waiver` field in its YAML frontmatter. This allows you to keep committed artifacts alongside the code they relate to.
+- **Repo-scoped local directories**: Any `.md` file within `.ai-review/<owner>/<repo>/personas/`, `.ai-review/<owner>/<repo>/primers/`, or `.ai-review/<owner>/<repo>/waivers/` is automatically loaded from the local checkout of this tool. All subdirectories are searched recursively. Files in these directories do **not** require an `ai_review` field in their frontmatter.
+
+The local checkout is repo-scoped only. The tool does not load local global directories like `.ai-review/personas/` or arbitrary local Markdown files outside `.ai-review/<owner>/<repo>/...`.
 
 ### Personas
 
-Create persona files in `.ai-review/<owner>/<repo>/personas/` or anywhere in your repository (with the `ai_review: persona` field). Personas support several fields in their YAML frontmatter:
+Create persona files in `.ai-review/<owner>/<repo>/personas/` for local repo-scoped configuration, or commit them anywhere in the target repository with `ai_review: persona` in frontmatter. Personas support several fields in their YAML frontmatter:
 
 ```markdown
 ---
@@ -143,7 +147,7 @@ You are a security expert. Review the following PR for security vulnerabilities.
 
 Primers provide extra context, constraints, or blueprints to personas based on the specific files they are analyzing. They are included in the persona prompt only if the persona is analyzing files that match the primer's filters.
 
-Create primer files in `.ai-review/<owner>/<repo>/primers/` or anywhere in your repository (with the `ai_review: primer` field). They support the same filtering fields as personas (`path_filters`, `exclude_filters`, `regex_filters`, `branch_filters`, `function_filters`, `line_numbers_filter`, `date_filter`):
+Create primer files in `.ai-review/<owner>/<repo>/primers/` for local repo-scoped configuration, or commit them anywhere in the target repository with `ai_review: primer` in frontmatter. They support the same filtering fields as personas (`path_filters`, `exclude_filters`, `regex_filters`, `branch_filters`, `function_filters`, `line_numbers_filter`, `date_filter`):
 
 ```markdown
 ---
@@ -162,7 +166,7 @@ The `type` field matches the types defined in `config.yaml` to provide additiona
 
 Waivers allow you to automatically suppress specific findings based on predefined rules. This is useful for ignoring known issues, legacy code patterns, or false positives.
 
-Create waiver files in `.ai-review/<owner>/<repo>/waivers/` or anywhere in your repository (with the `ai_review: waiver` field). Waivers use the same filters as Personas and Primers to determine their applicability to a finding's location.
+Create waiver files in `.ai-review/<owner>/<repo>/waivers/` for local repo-scoped configuration, or commit them anywhere in the target repository with `ai_review: waiver` in frontmatter. Waivers use the same filters as Personas and Primers to determine their applicability to a finding's location.
 
 ```markdown
 ---
