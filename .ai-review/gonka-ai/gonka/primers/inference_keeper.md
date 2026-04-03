@@ -1,7 +1,9 @@
 ---
 id: inference_keeper
 type: implementation
-path_filters: ["./inference-chain/**/keeper/keeper.go"]
+any:
+  - path_filters: ["./inference-chain/**/keeper/keeper.go"]
+  - regex_filters: ["KVStoreAdapter"]
 ---
 Gonka uses the collections that were introduced in Cosmos SDK 0.50.x+
 

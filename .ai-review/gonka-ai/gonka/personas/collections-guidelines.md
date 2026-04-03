@@ -1,7 +1,10 @@
 ---
 id: collections-guidelines
 model_category: best_code
-path_filters: ["inference-chain/x/**/*.go"]
+any: 
+    - path_filters: ["inference-chain/x/**/*.go"]
+    - regex_filters: ["KVStoreAdapter"]
+
 exclude_filters: ["**/*_test.go", "**/*.pb.go", "**/*.pulsar.go", "inference-chain/testutil/**"]
 include_explainers: ["state-modified"]
 ---
@@ -30,3 +33,5 @@ This is MUCH better than loading in the entire collection and iterating. Look fo
 Look for situations where walking through the collection instead of loading the entire thing would be more efficient.
 
 Also look for removal of data, and see if the data can be removed using Clear() with a ranger vs iterating over a collection and removing each item.
+
+Call out as a critical issue any new code that uses the "old" method of handling data, such as runtime.KVStoreAdapter, instead of using the more modern Cosmos SDK collections api. 

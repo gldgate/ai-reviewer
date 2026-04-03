@@ -13,3 +13,4 @@ Weight, rewards and voting power are all determined by periodic "Proof of Comput
 Each Participant is also running an API server that servers the actual AI inferences and orchestrates PoCs (this is in the ./decentralized-api folder)
 
 Inferences are registered on the blockchain (StartInference and FinishInference). They are randomly validated by other participants to make sure they have used the correct model.
+
