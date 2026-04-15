@@ -1,0 +1,2 @@
+- Update persona: `.ai-review/gldgate/gldgate/personas/gldgate-resolver-consistency.md` (subject for refinement/update).
+- Add Internet Computer security checklist coverage, including explicit DDoS protection checks.
